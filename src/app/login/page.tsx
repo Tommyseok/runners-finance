@@ -1,4 +1,5 @@
 import { Suspense } from "react";
+import { InAppBrowserWarning } from "./inapp-browser-warning";
 import { LoginButton } from "./login-button";
 
 export default function LoginPage({
@@ -8,8 +9,8 @@ export default function LoginPage({
 }) {
   const next = searchParams.next ?? "/";
   return (
-    <div className="mx-auto flex min-h-dvh max-w-[480px] flex-col items-center justify-center px-6">
-      <div className="mb-12 flex flex-col items-center text-center">
+    <div className="mx-auto flex min-h-dvh max-w-[480px] flex-col justify-center px-6 py-10">
+      <div className="mb-10 flex flex-col items-center text-center">
         <div className="mb-4 flex h-20 w-20 items-center justify-center rounded-3xl bg-primary text-primary-foreground shadow-lg">
           <span className="text-3xl font-bold">R</span>
         </div>
@@ -18,6 +19,7 @@ export default function LoginPage({
           교회 고등부 회계를 한 번에
         </p>
       </div>
+      <InAppBrowserWarning />
       <Suspense fallback={null}>
         <LoginButton next={next} />
       </Suspense>

@@ -2,6 +2,7 @@
 
 import { useRef, useState } from "react";
 import { useRouter } from "next/navigation";
+import imageCompression from "browser-image-compression";
 import { Camera, Loader2, Plus, Sparkles, Trash2, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
@@ -77,22 +78,63 @@ export function NewReceiptForm({
   const [submitting, setSubmitting] = useState(false);
   const [submitError, setSubmitError] = useState<string | null>(null);
 
-  function handleFilesPicked(picked: FileList | null) {
+  const [compressing, setCompressing] = useState(false);
+
+  async function handleFilesPicked(picked: FileList | null) {
     if (!picked) return;
     const list = Array.from(picked);
     const remaining = MAX_IMAGES - files.length;
     const accepted = list.slice(0, Math.max(0, remaining));
     if (accepted.length === 0) return;
 
-    setFiles((prev) => [...prev, ...accepted]);
-    accepted.forEach((f) => {
-      const reader = new FileReader();
-      reader.onload = (e) => {
-        const url = e.target?.result as string;
-        setPreviews((prev) => [...prev, url]);
-      };
-      reader.readAsDataURL(f);
-    });
+    setCompressing(true);
+    try {
+      const processed = await Promise.all(
+        accepted.map(async (f) => {
+          try {
+            const compressed = await imageCompression(f, {
+              maxSizeMB: 1,
+              maxWidthOrHeight: 1600,
+              useWebWorker: true,
+              fileType: "image/jpeg",
+              initialQuality: 0.85,
+            });
+            // browser-image-compression returns a File; ensure JPEG name.
+            const renamed = compressed.name.match(/\.jpe?g$/i)
+              ? compressed
+              : new File(
+                  [compressed],
+                  compressed.name.replace(/\.[^.]+$/, "") + ".jpg",
+                  { type: "image/jpeg", lastModified: Date.now() },
+                );
+            return renamed;
+          } catch (e) {
+            console.warn("[receipt new] compression failed, using original:", e);
+            return f;
+          }
+        }),
+      );
+
+      setFiles((prev) => [...prev, ...processed]);
+
+      await Promise.all(
+        processed.map(
+          (f) =>
+            new Promise<void>((resolve) => {
+              const reader = new FileReader();
+              reader.onload = (e) => {
+                const url = e.target?.result as string;
+                setPreviews((prev) => [...prev, url]);
+                resolve();
+              };
+              reader.onerror = () => resolve();
+              reader.readAsDataURL(f);
+            }),
+        ),
+      );
+    } finally {
+      setCompressing(false);
+    }
   }
 
   function removeImage(idx: number) {
@@ -281,10 +323,17 @@ export function NewReceiptForm({
             <button
               type="button"
               onClick={() => fileInputRef.current?.click()}
-              className="flex aspect-square flex-col items-center justify-center gap-1 rounded-lg border-2 border-dashed text-muted-foreground"
+              disabled={compressing}
+              className="flex aspect-square flex-col items-center justify-center gap-1 rounded-lg border-2 border-dashed text-muted-foreground disabled:opacity-50"
             >
-              <Camera className="h-6 w-6" />
-              <span className="text-xs">사진 추가</span>
+              {compressing ? (
+                <Loader2 className="h-6 w-6 animate-spin" />
+              ) : (
+                <Camera className="h-6 w-6" />
+              )}
+              <span className="text-xs">
+                {compressing ? "처리 중..." : "사진 추가"}
+              </span>
             </button>
           )}
         </div>
@@ -296,17 +345,22 @@ export function NewReceiptForm({
           multiple
           className="hidden"
           onChange={(e) => {
-            handleFilesPicked(e.target.files);
+            void handleFilesPicked(e.target.files);
             e.target.value = "";
           }}
         />
+        {compressing && (
+          <p className="mt-2 text-xs text-muted-foreground">
+            사진 처리 중... (큰 사진은 자동으로 압축됩니다)
+          </p>
+        )}
         {files.length > 0 && (
           <Button
             type="button"
             variant="outline"
             className="mt-3 w-full"
             onClick={analyze}
-            disabled={analyzing}
+            disabled={analyzing || compressing}
           >
             {analyzing ? (
               <Loader2 className="h-4 w-4 animate-spin" />
@@ -489,7 +543,7 @@ export function NewReceiptForm({
         type="submit"
         size="lg"
         className="w-full"
-        disabled={submitting}
+        disabled={submitting || compressing}
       >
         {submitting ? (
           <Loader2 className="h-4 w-4 animate-spin" />
