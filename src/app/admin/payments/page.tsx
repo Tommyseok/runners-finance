@@ -14,17 +14,39 @@ import { PaymentsListClient, type PaymentItem } from "./payments-list-client";
 
 export const dynamic = "force-dynamic";
 
-export default async function PaymentsPage() {
+type StatusFilter = "pending" | "paid" | "all";
+
+function parseStatus(v: string | string[] | undefined): StatusFilter {
+  const s = Array.isArray(v) ? v[0] : v;
+  if (s === "paid" || s === "all") return s;
+  return "pending";
+}
+
+export default async function PaymentsPage({
+  searchParams,
+}: {
+  searchParams: { status?: string };
+}) {
+  const status = parseStatus(searchParams.status);
   const { profile, supabase } = await requireAdmin();
   const orgId = profile.org_id!;
 
-  const { data: rRows } = await supabase
-    .from("receipt")
-    .select("*")
-    .eq("org_id", orgId)
-    .eq("status", "pending")
-    .order("expense_date", { ascending: true, nullsFirst: false })
-    .order("created_at", { ascending: true });
+  let query = supabase.from("receipt").select("*").eq("org_id", orgId);
+  if (status === "pending") {
+    query = query
+      .eq("status", "pending")
+      .order("expense_date", { ascending: true, nullsFirst: false })
+      .order("created_at", { ascending: true });
+  } else if (status === "paid") {
+    query = query
+      .eq("status", "paid")
+      .order("paid_at", { ascending: false, nullsFirst: false });
+  } else {
+    query = query
+      .order("status", { ascending: true })
+      .order("expense_date", { ascending: false, nullsFirst: false });
+  }
+  const { data: rRows } = await query;
   const receipts = (rRows ?? []) as Receipt[];
 
   const userIds = Array.from(new Set(receipts.map((r) => r.user_id)));
@@ -55,7 +77,6 @@ export default async function PaymentsPage() {
         .from("bank_account")
         .select("*")
         .eq("org_id", orgId)
-        .eq("is_active", true)
         .order("label"),
     ]);
 
@@ -70,7 +91,11 @@ export default async function PaymentsPage() {
       (c) => [c.id, c.name],
     ),
   );
-  const banks = (bankRows ?? []) as BankAccount[];
+  const allBanks = (bankRows ?? []) as BankAccount[];
+  const activeBanks = allBanks.filter((b) => b.is_active);
+  const bankLabelById = new Map(
+    allBanks.map((b) => [b.id, `${b.bank_name} · ${b.label}`]),
+  );
 
   const images = (imgRows ?? []) as ReceiptImage[];
   const imagesByReceipt = new Map<string, ReceiptImage[]>();
@@ -95,38 +120,50 @@ export default async function PaymentsPage() {
 
   const total = receipts.reduce((s, r) => s + (r.total_amount ?? 0), 0);
 
+  const summaryLabel =
+    status === "paid"
+      ? "송금완료 합계"
+      : status === "all"
+        ? "전체 합계"
+        : "대기 합계";
+
+  const emptyText =
+    status === "paid"
+      ? "송금완료된 항목이 없습니다."
+      : status === "all"
+        ? "표시할 항목이 없습니다."
+        : "송금할 항목이 없습니다.";
+
   return (
     <AppShell isAdmin>
       <PageHeader title="송금 처리" back />
       <div className="space-y-3 px-4 py-4">
         <Card>
           <CardContent className="flex items-center justify-between p-4">
-            <span className="text-sm text-muted-foreground">대기 합계</span>
+            <span className="text-sm text-muted-foreground">{summaryLabel}</span>
             <span className="text-lg font-bold">
               {formatCurrency(total)} ({receipts.length}건)
             </span>
           </CardContent>
         </Card>
 
-        {receipts.length === 0 ? (
-          <Card>
-            <CardContent className="p-10 text-center text-sm text-muted-foreground">
-              송금할 항목이 없습니다.
-            </CardContent>
-          </Card>
-        ) : (
-          <PaymentsListClient
-            banks={banks}
-            items={receipts.map<PaymentItem>((r) => ({
-              receipt: r,
-              userName: userMap.get(r.user_id) ?? "",
-              categoryName: r.category_id
-                ? (catMap.get(r.category_id) ?? null)
-                : null,
-              imageUrls: signedByReceipt.get(r.id) ?? [],
-            }))}
-          />
-        )}
+        <PaymentsListClient
+          status={status}
+          banks={activeBanks}
+          showStatusBadge={status === "all"}
+          items={receipts.map<PaymentItem>((r) => ({
+            receipt: r,
+            userName: userMap.get(r.user_id) ?? "",
+            categoryName: r.category_id
+              ? (catMap.get(r.category_id) ?? null)
+              : null,
+            imageUrls: signedByReceipt.get(r.id) ?? [],
+            paidFromBankLabel: r.paid_from_bank_id
+              ? (bankLabelById.get(r.paid_from_bank_id) ?? null)
+              : null,
+          }))}
+          emptyText={emptyText}
+        />
       </div>
     </AppShell>
   );
