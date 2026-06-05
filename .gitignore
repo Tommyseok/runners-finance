@@ -57,6 +57,9 @@ public/fonts/*.otf
 public/fonts/*.ttf
 public/fonts/*.woff
 public/fonts/*.woff2
+# 단, PDF 생성용 NanumGothic(OFL 라이선스, 재배포 허용)은 프로덕션 배포 위해 커밋
+!public/fonts/NanumGothic-Regular.ttf
+!public/fonts/NanumGothic-Bold.ttf
 .env*
 
 # Local accounting work data (sensitive — church financial data, never commit)
