@@ -77,17 +77,32 @@ export function reconcileBank(
   txns: ReconTxn[],
   receipts: ReconReceipt[],
 ): ReconResult[] {
-  const used = new Set<string>();
-  const resultByIndex = new Map<number, ReconResult>();
+  // 1. 기본 분류 (mutable — 이후 보정)
+  const kinds: BankTxnKind[] = txns.map((t) => {
+    if (isWash(t)) return "wash";
+    if (isTransfer(t)) return "transfer";
+    if (t.deposit > 0) return "income";
+    if (t.withdraw > 0) return "expense";
+    return "unknown";
+  });
 
-  // 출금 중 지출만(카드 먼저 → 1:1이 묶음에 먹히지 않게)
+  // 2. 잘못입금 환불 출금에 대응하는 입금도 wash로 자동 분류.
+  //    (예: 전성희 헌금 280,000이 자체통장에 잘못 입금됐다 환불된 케이스 →
+  //     입금 3건도 수입이 아닌 잘못입금으로. 매 import마다 자동 적용)
+  markWashRefundDeposits(txns, kinds);
+
+  const used = new Set<string>();
+  const matchByIndex = new Map<number, string[]>();
+
+  // 지출만(카드 먼저 → 1:1이 묶음에 먹히지 않게)
   const expenses = txns
-    .filter((t) => t.withdraw > 0 && !isWash(t) && !isTransfer(t))
+    .map((t, i) => ({ t, i }))
+    .filter(({ i }) => kinds[i] === "expense")
     .sort((a, b) => {
-      const ca = a.method.includes("카드") ? 0 : 1;
-      const cb = b.method.includes("카드") ? 0 : 1;
+      const ca = a.t.method.includes("카드") ? 0 : 1;
+      const cb = b.t.method.includes("카드") ? 0 : 1;
       if (ca !== cb) return ca - cb;
-      return a.date.localeCompare(b.date);
+      return a.t.date.localeCompare(b.t.date);
     });
 
   function matchSingle(t: ReconTxn): ReconReceipt | null {
@@ -129,52 +144,102 @@ export function reconcileBank(
     return null;
   }
 
-  function recordMatch(t: ReconTxn, ids: string[]) {
+  function recordMatch(i: number, ids: string[]) {
     for (const id of ids) used.add(id);
-    resultByIndex.set(t.index, {
-      index: t.index,
-      kind: "expense",
-      matchStatus: ids.length ? "matched" : "unmatched",
-      matchedReceiptIds: ids,
-    });
+    matchByIndex.set(i, ids);
   }
 
   // 같은 금액 단일 영수증이 아예 없는 거래 = "강제 묶음"(예: 390,000=215k+119k+52k+4k).
   // 단일이 이 묶음의 구성요소를 가로채기 전에 먼저 처리.
   const hasAnyReceiptOfAmount = (amt: number) => receipts.some((r) => r.amount === amt);
-  const forcedLump = expenses.filter((t) => !hasAnyReceiptOfAmount(t.withdraw));
-  const rest = expenses.filter((t) => hasAnyReceiptOfAmount(t.withdraw));
+  const forcedLump = expenses.filter(({ t }) => !hasAnyReceiptOfAmount(t.withdraw));
+  const rest = expenses.filter(({ t }) => hasAnyReceiptOfAmount(t.withdraw));
 
-  for (const t of forcedLump) {
+  for (const { t, i } of forcedLump) {
     const lump = matchLump(t);
-    recordMatch(t, lump ? lump.map((r) => r.id) : []);
+    recordMatch(i, lump ? lump.map((r) => r.id) : []);
   }
-  for (const t of rest) {
+  for (const { t, i } of rest) {
     const single = matchSingle(t);
     if (single) {
-      recordMatch(t, [single.id]);
+      recordMatch(i, [single.id]);
       continue;
     }
     const lump = matchLump(t);
-    recordMatch(t, lump ? lump.map((r) => r.id) : []);
+    recordMatch(i, lump ? lump.map((r) => r.id) : []);
   }
 
-  // 나머지 분류
-  return txns.map((t) => {
-    const existing = resultByIndex.get(t.index);
-    if (existing) return existing;
-    let kind: BankTxnKind = "unknown";
-    if (isWash(t)) kind = "wash";
-    else if (isTransfer(t)) kind = "transfer";
-    else if (t.deposit > 0) kind = "income";
-    else if (t.withdraw > 0) kind = "expense";
+  // 결과 = 최종 kind + 지출 매칭
+  return txns.map((t, i) => {
+    if (kinds[i] === "expense") {
+      const ids = matchByIndex.get(i) ?? [];
+      return {
+        index: i,
+        kind: "expense" as BankTxnKind,
+        matchStatus: ids.length ? ("matched" as const) : ("unmatched" as const),
+        matchedReceiptIds: ids,
+      };
+    }
     return {
-      index: t.index,
-      kind,
-      matchStatus: "na",
+      index: i,
+      kind: kinds[i],
+      matchStatus: "na" as const,
       matchedReceiptIds: [],
     };
   });
+}
+
+/**
+ * 잘못입금 환불 출금(kind=wash, 출금)에 대응하는 입금을 찾아 wash로 표시.
+ * 거래처명이 겹치고 ±7일 내, 금액이 같거나 부분합이 같은 입금을 환불 대상으로 본다.
+ */
+function markWashRefundDeposits(txns: ReconTxn[], kinds: BankTxnKind[]): void {
+  for (let wi = 0; wi < txns.length; wi++) {
+    if (kinds[wi] !== "wash" || txns[wi].withdraw <= 0) continue;
+    const w = txns[wi];
+    const base = (w.counterparty || "").split("/")[0].trim();
+    if (!base) continue;
+
+    const cands: { idx: number; amount: number }[] = [];
+    for (let di = 0; di < txns.length; di++) {
+      if (kinds[di] !== "income") continue; // 이미 wash/transfer면 제외
+      const d = txns[di];
+      if (d.deposit <= 0) continue;
+      if (!(d.counterparty || "").includes(base)) continue;
+      if (dayDiff(d.date, w.date) > 7) continue;
+      cands.push({ idx: di, amount: d.deposit });
+    }
+    if (!cands.length) continue;
+
+    const single = cands.find((c) => c.amount === w.withdraw);
+    if (single) {
+      kinds[single.idx] = "wash";
+      continue;
+    }
+    const subset = depositSubset(cands, w.withdraw);
+    if (subset) for (const c of subset) kinds[c.idx] = "wash";
+  }
+}
+
+/** 입금 후보 중 합이 target인 부분집합 (소규모 백트래킹). */
+function depositSubset(
+  items: { idx: number; amount: number }[],
+  target: number,
+): { idx: number; amount: number }[] | null {
+  if (items.length > 16) return null;
+  const sorted = [...items].sort((a, b) => a.amount - b.amount);
+  const result: { idx: number; amount: number }[] = [];
+  function bt(start: number, sum: number): boolean {
+    if (sum === target && result.length > 0) return true;
+    if (sum > target) return false;
+    for (let i = start; i < sorted.length; i++) {
+      result.push(sorted[i]);
+      if (bt(i + 1, sum + sorted[i].amount)) return true;
+      result.pop();
+    }
+    return false;
+  }
+  return bt(0, 0) ? [...result] : null;
 }
 
 /** k개 부분집합 중 합이 target인 첫 조합 (소규모 백트래킹) */

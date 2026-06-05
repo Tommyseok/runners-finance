@@ -219,8 +219,25 @@ export async function reconcileOrg(
   return { matched, unmatched };
 }
 
-/** 입금行(kind=income) → income 자동생성. bank_transaction_id로 멱등. */
+/** 입금行(kind=income) → income 자동생성. bank_transaction_id로 멱등.
+ *  분류가 wash/transfer로 바뀐 입금의 자동수입 행은 제거(동기화). */
 export async function deriveIncome(admin: Admin, orgId: string): Promise<number> {
+  // 0. 더 이상 income 이 아닌 거래에 연결된 자동수입 행 제거
+  const { data: nonIncomeTxns } = await admin
+    .from("bank_transaction")
+    .select("id")
+    .eq("org_id", orgId)
+    .neq("kind", "income");
+  const nonIncomeIds = (nonIncomeTxns ?? []).map((t: { id: string }) => t.id);
+  if (nonIncomeIds.length) {
+    await admin
+      .from("income")
+      .delete()
+      .eq("org_id", orgId)
+      .eq("source", "bank")
+      .in("bank_transaction_id", nonIncomeIds);
+  }
+
   const { data: txnsRaw } = await admin
     .from("bank_transaction")
     .select("*")
