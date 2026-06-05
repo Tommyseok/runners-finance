@@ -1,10 +1,11 @@
 import Link from "next/link";
-import { Camera, Receipt, Wallet, ChevronRight } from "lucide-react";
+import { Camera, Receipt, Wallet, ChevronRight, Landmark } from "lucide-react";
 import { AppShell } from "@/components/app-shell";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { requireMembership } from "@/lib/auth";
 import { formatCurrency, formatDate } from "@/lib/utils";
+import { getBankBalances } from "@/lib/ledger";
 import type { Organization, Receipt as ReceiptT } from "@/lib/db-types";
 import { WelcomeBanner } from "./welcome-banner";
 
@@ -48,6 +49,11 @@ export default async function HomePage({
     "id" | "merchant" | "expense_date" | "total_amount" | "status" | "category_id"
   >[];
 
+  // 통장 잔액 (선생님 투명 조회). 통장 미등록이면 빈 배열.
+  const balances = await getBankBalances(supabase, profile.org_id!);
+  const hasBalances = balances.some((b) => b.balance !== null);
+  const totalBalance = balances.reduce((s, b) => s + (b.balance ?? 0), 0);
+
   return (
     <AppShell isAdmin={profile.role === "admin"}>
       {searchParams.welcome === "1" && <WelcomeBanner orgName={orgName} />}
@@ -87,6 +93,40 @@ export default async function HomePage({
             </CardContent>
           </Card>
         </Link>
+
+        {hasBalances && (
+          <Link href="/ledger">
+            <Card className="transition-transform active:scale-[0.99]">
+              <CardContent className="p-5">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-2 text-xs text-muted-foreground">
+                    <Landmark className="h-4 w-4 text-primary" /> 현재 잔액
+                  </div>
+                  <ChevronRight className="h-4 w-4 text-muted-foreground" />
+                </div>
+                <div className="mt-1 text-xl font-bold">
+                  {formatCurrency(totalBalance)}
+                </div>
+                <div className="mt-2 space-y-1">
+                  {balances
+                    .filter((b) => b.balance !== null)
+                    .map((b) => (
+                      <div
+                        key={b.bankAccountId}
+                        className="flex items-center justify-between text-xs text-muted-foreground"
+                      >
+                        <span>{b.label}</span>
+                        <span className="font-medium text-foreground">
+                          {formatCurrency(b.balance)}
+                        </span>
+                      </div>
+                    ))}
+                </div>
+                <div className="mt-2 text-xs text-primary">입출금 원장 보기 →</div>
+              </CardContent>
+            </Card>
+          </Link>
+        )}
 
         <Card>
           <CardContent className="p-0">
