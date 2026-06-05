@@ -48,9 +48,11 @@ function toInt(v: unknown): number {
 }
 
 function parseMoneyMeta(s: string | undefined): number | null {
+  // s 는 이미 "키 : 값"에서 분리된 값 부분 (예: "705,280"). 숫자만 추출.
   if (!s) return null;
-  const m = s.split(":").slice(1).join(":").trim();
-  const n = Number(m.replace(/[,\s원]/g, ""));
+  const cleaned = s.replace(/[^\d-]/g, "");
+  if (cleaned === "") return null;
+  const n = Number(cleaned);
   return Number.isFinite(n) ? n : null;
 }
 
