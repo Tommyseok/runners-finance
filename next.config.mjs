@@ -23,6 +23,11 @@ const nextConfig = {
       bodySizeLimit: "20mb",
     },
     serverComponentsExternalPackages: ["pdfkit", "exceljs"],
+    // PDF 라우트 람다에 한글 폰트(.ttf) 파일을 명시적으로 포함 (fs.readFile 동적경로 추적 누락 방지)
+    outputFileTracingIncludes: {
+      "/api/download/expense-report": ["./public/fonts/NanumGothic-*.ttf"],
+      "/api/download/pdf": ["./public/fonts/NanumGothic-*.ttf"],
+    },
   },
 };
 
