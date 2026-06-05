@@ -9,6 +9,7 @@ import {
   Landmark,
   ArrowUpCircle,
   BookOpen,
+  FileText,
 } from "lucide-react";
 import { AppShell } from "@/components/app-shell";
 import { PageHeader } from "@/components/page-header";
@@ -183,6 +184,7 @@ export default async function AdminHomePage() {
           <AdminLink href="/ledger" icon={BookOpen} label="입출금 원장" />
           <AdminLink href="/admin/bank" icon={Landmark} label="통장 내역·대사" />
           <AdminLink href="/admin/income" icon={ArrowUpCircle} label="수입 관리" />
+          <AdminLink href="/admin/reports" icon={FileText} label="지출증빙 PDF" />
           <AdminLink href="/admin/payments" icon={ListChecks} label="송금 처리" />
           <AdminLink href="/admin/categories" icon={Tags} label="카테고리" />
           <AdminLink href="/admin/banks" icon={CreditCard} label="통장 계좌" />
