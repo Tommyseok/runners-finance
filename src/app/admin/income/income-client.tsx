@@ -77,6 +77,31 @@ export function IncomeClient({
       return;
     }
     const supabase = createClient();
+
+    // 중복 방지: 같은 금액의 입금이 통장(±5일)에 이미 있으면 경고.
+    // 통장 입금은 업로드 시 자동으로 수입에 잡히므로 수동으로 또 넣으면 중복.
+    const from = new Date(date);
+    from.setDate(from.getDate() - 5);
+    const to = new Date(date);
+    to.setDate(to.getDate() + 5);
+    const { data: dup } = await supabase
+      .from("bank_transaction")
+      .select("txn_at, counterparty")
+      .eq("org_id", orgId)
+      .eq("deposit", amt)
+      .gte("txn_at", from.toISOString())
+      .lte("txn_at", to.toISOString())
+      .limit(1);
+    if (dup && dup.length > 0) {
+      const d = String(dup[0].txn_at).slice(0, 10);
+      const ok = confirm(
+        `같은 금액(${formatCurrency(amt)})의 입금이 통장에 이미 있습니다.\n` +
+          `(${d} ${dup[0].counterparty ?? ""})\n\n` +
+          `통장 입금은 업로드 시 수입에 자동 등록됩니다. 그래도 중복으로 추가할까요?`,
+      );
+      if (!ok) return;
+    }
+
     const { error: err } = await supabase.from("income").insert({
       org_id: orgId,
       income_date: date,
@@ -117,6 +142,10 @@ export function IncomeClient({
       >
         <Plus className="h-4 w-4" /> 수입 직접 추가
       </Button>
+      <p className="px-1 text-xs text-muted-foreground">
+        통장에 찍힌 입금은 업로드 시 자동 등록됩니다(중복 추가 금지). 직접 추가는
+        통장에 없는 수입(예: 미입금 현금 헌금)에만 사용하세요.
+      </p>
 
       {items.length === 0 ? (
         <Card>
