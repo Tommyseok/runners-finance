@@ -57,3 +57,10 @@ public/fonts/*.otf
 public/fonts/*.ttf
 public/fonts/*.woff
 public/fonts/*.woff2
+.env*
+
+# Local accounting work data (sensitive — church financial data, never commit)
+scratch/
+downloaded-receipts/
+# Local dev/analysis tooling (hardcoded local paths, references gitignored data)
+scripts/

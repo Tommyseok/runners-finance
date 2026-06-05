@@ -6,6 +6,9 @@ import {
   Tags,
   Users,
   Wallet,
+  Landmark,
+  ArrowUpCircle,
+  BookOpen,
 } from "lucide-react";
 import { AppShell } from "@/components/app-shell";
 import { PageHeader } from "@/components/page-header";
@@ -177,9 +180,12 @@ export default async function AdminHomePage() {
         </Card>
 
         <div className="grid grid-cols-2 gap-3 pt-2">
+          <AdminLink href="/ledger" icon={BookOpen} label="입출금 원장" />
+          <AdminLink href="/admin/bank" icon={Landmark} label="통장 내역·대사" />
+          <AdminLink href="/admin/income" icon={ArrowUpCircle} label="수입 관리" />
           <AdminLink href="/admin/payments" icon={ListChecks} label="송금 처리" />
           <AdminLink href="/admin/categories" icon={Tags} label="카테고리" />
-          <AdminLink href="/admin/banks" icon={CreditCard} label="통장 관리" />
+          <AdminLink href="/admin/banks" icon={CreditCard} label="통장 계좌" />
           <AdminLink href="/admin/users" icon={Users} label="사용자" />
         </div>
 
