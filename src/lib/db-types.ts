@@ -49,6 +49,7 @@ export interface ReceiptItem {
 export interface Receipt {
   id: string;
   org_id: string;
+  receipt_no: number | null;
   user_id: string;
   merchant: string | null;
   expense_date: string | null;

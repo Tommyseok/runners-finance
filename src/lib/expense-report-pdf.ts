@@ -20,7 +20,7 @@ export interface ExpenseReportData {
 const MARGIN = 30;
 const USABLE_W = 842 - MARGIN * 2; // 782
 const TEXT_COLS = [
-  { key: "no", label: "순번", w: 20, align: "center" as const, fs: 8 },
+  { key: "no", label: "No", w: 26, align: "center" as const, fs: 8 },
   { key: "user", label: "지출인", w: 40, align: "center" as const, fs: 8 },
   { key: "edate", label: "지출일자", w: 46, align: "center" as const, fs: 7.5 },
   { key: "cdate", label: "청구일자", w: 46, align: "center" as const, fs: 7.5 },
@@ -61,14 +61,18 @@ export async function renderExpenseReportPdf(data: ExpenseReportData): Promise<B
   const total = receipts.reduce((s, r) => s + (r.total_amount ?? 0), 0);
   const startX = MARGIN;
   const tableRight = startX + TABLE_W;
+  // 영수증No 순으로 정렬 → PDF·원장·엑셀에서 같은 번호로 쉽게 대조
+  const sorted = [...receipts].sort(
+    (a, b) => (a.receipt_no ?? 1e9) - (b.receipt_no ?? 1e9),
+  );
 
   pdf.addPage();
   drawTitle(pdf, orgName, periodLabel, receipts.length, total);
   let y = pdf.y + 6;
   y = drawHeaderRow(pdf, startX, y);
 
-  for (let i = 0; i < receipts.length; i += 1) {
-    const r = receipts[i];
+  for (let i = 0; i < sorted.length; i += 1) {
+    const r = sorted[i];
     if (y + ROW_H > pdf.page.height - MARGIN - 16) {
       pdf.addPage();
       y = MARGIN;
@@ -77,7 +81,7 @@ export async function renderExpenseReportPdf(data: ExpenseReportData): Promise<B
 
     const catName = r.category_id ? (catMap.get(r.category_id) ?? "(미지정)") : "(미지정)";
     const cells: Record<string, string> = {
-      no: String(i + 1),
+      no: r.receipt_no != null ? String(r.receipt_no) : "-",
       user: userMap.get(r.user_id) ?? "-",
       edate: r.expense_date ?? "-",
       cdate: r.created_at ? r.created_at.slice(0, 10) : "-",

@@ -6,7 +6,8 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { requireMembership } from "@/lib/auth";
 import { formatCurrency, formatDate } from "@/lib/utils";
-import { getBankBalances, getLedgerEntries, monthOptions } from "@/lib/ledger";
+import { getBankBalances, getEnrichedLedger, monthOptions } from "@/lib/ledger";
+import { LedgerExcelButton } from "./ledger-excel-button";
 
 export const dynamic = "force-dynamic";
 
@@ -18,11 +19,21 @@ export default async function LedgerPage({
   const { profile, supabase } = await requireMembership();
   const orgId = profile.org_id!;
   const month = searchParams.month ?? "all";
+  const isAdmin = profile.role === "admin";
 
-  const [balances, ledger] = await Promise.all([
+  const [balances, entries] = await Promise.all([
     getBankBalances(supabase, orgId),
-    getLedgerEntries(supabase, orgId, month),
+    getEnrichedLedger(supabase, orgId, month),
   ]);
+
+  const real = entries.filter((e) => e.kind !== "wash" && e.kind !== "transfer");
+  const incomeTotal = real
+    .filter((e) => e.direction === "income")
+    .reduce((s, e) => s + e.deposit, 0);
+  const expenseTotal = real
+    .filter((e) => e.direction === "expense")
+    .reduce((s, e) => s + e.withdraw, 0);
+  const ledger = { entries, incomeTotal, expenseTotal };
 
   const totalBalance = balances.reduce((s, b) => s + (b.balance ?? 0), 0);
   const months = monthOptions();
@@ -101,6 +112,8 @@ export default async function LedgerPage({
           ))}
         </div>
 
+        {isAdmin && <LedgerExcelButton month={month} />}
+
         {/* 거래 목록 */}
         <Card>
           <CardContent className="p-0">
@@ -118,53 +131,64 @@ export default async function LedgerPage({
             ) : (
               <ul className="divide-y">
                 {ledger.entries.map((e) => (
-                  <li
-                    key={e.id}
-                    className="flex items-center justify-between gap-3 px-4 py-3"
-                  >
-                    <div className="min-w-0">
-                      <div className="truncate text-sm font-medium">
-                        {e.counterparty ?? "(거래처 미상)"}
-                      </div>
-                      <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
-                        {formatDate(e.txn_date)}
-                        {e.kind === "wash" && (
-                          <Badge variant="secondary" className="text-[10px]">
-                            잘못입금
-                          </Badge>
-                        )}
-                        {e.kind === "transfer" && (
-                          <Badge variant="secondary" className="text-[10px]">
-                            내부이체
-                          </Badge>
-                        )}
-                        {e.direction === "expense" &&
-                          e.kind === "expense" &&
-                          e.match_status === "unmatched" && (
-                            <Badge variant="warning" className="text-[10px]">
-                              영수증 없음
+                  <li key={e.id} className="px-4 py-3">
+                    <div className="flex items-start justify-between gap-3">
+                      <div className="min-w-0">
+                        <div className="truncate text-sm font-medium">
+                          {e.counterparty ?? "(거래처 미상)"}
+                        </div>
+                        <div className="mt-0.5 flex flex-wrap items-center gap-1.5 text-xs text-muted-foreground">
+                          <span>{formatDate(e.txnDate)}</span>
+                          <span>· {e.category}</span>
+                          {e.receiptNo != null && (
+                            <Badge variant="secondary" className="text-[10px]">
+                              영수증 #{e.receiptNo}
                             </Badge>
                           )}
-                      </div>
-                    </div>
-                    <div className="text-right">
-                      <div
-                        className={`text-sm font-semibold ${
-                          e.direction === "income"
-                            ? "text-emerald-700"
-                            : "text-rose-700"
-                        }`}
-                      >
-                        {e.direction === "income" ? "+" : "−"}
-                        {formatCurrency(
-                          e.direction === "income" ? e.deposit : e.withdraw,
+                          {e.kind === "wash" && (
+                            <Badge variant="secondary" className="text-[10px]">
+                              잘못입금
+                            </Badge>
+                          )}
+                          {e.kind === "transfer" && (
+                            <Badge variant="secondary" className="text-[10px]">
+                              내부이체
+                            </Badge>
+                          )}
+                          {e.direction === "expense" &&
+                            e.kind === "expense" &&
+                            e.matchStatus === "unmatched" && (
+                              <Badge variant="warning" className="text-[10px]">
+                                영수증 없음
+                              </Badge>
+                            )}
+                        </div>
+                        {e.content && e.content !== "-" && (
+                          <div className="mt-0.5 truncate text-xs text-muted-foreground">
+                            {e.content}
+                            {e.payer ? ` · ${e.payer}` : ""}
+                          </div>
                         )}
                       </div>
-                      {e.balance !== null && (
-                        <div className="text-[11px] text-muted-foreground">
-                          잔액 {formatCurrency(e.balance)}
+                      <div className="shrink-0 text-right">
+                        <div
+                          className={`text-sm font-semibold ${
+                            e.direction === "income"
+                              ? "text-emerald-700"
+                              : "text-rose-700"
+                          }`}
+                        >
+                          {e.direction === "income" ? "+" : "−"}
+                          {formatCurrency(
+                            e.direction === "income" ? e.deposit : e.withdraw,
+                          )}
                         </div>
-                      )}
+                        {e.balance !== null && (
+                          <div className="text-[11px] text-muted-foreground">
+                            잔액 {formatCurrency(e.balance)}
+                          </div>
+                        )}
+                      </div>
                     </div>
                   </li>
                 ))}
