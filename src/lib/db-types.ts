@@ -126,6 +126,7 @@ export interface Income {
   deposit_to_bank_id: string | null;
   bank_transaction_id: string | null;
   memo: string | null;
+  excluded: boolean;
   created_by: string | null;
   created_at: string;
   updated_at: string;
