@@ -1,7 +1,15 @@
 export type Role = "admin" | "teacher";
 export type ReceiptStatus = "pending" | "paid";
 export type ReceiptSource = "web" | "manual";
-export type IncomeCategory = "헌금" | "회비" | "전도금" | "지원금" | "잡수입" | "기타";
+export type IncomeCategory =
+  | "헌금"
+  | "회비"
+  | "수련회비"
+  | "QT도서비"
+  | "전도금"
+  | "지원금"
+  | "잡수입"
+  | "기타";
 export type IncomeSource = "bank" | "manual";
 export type BankTxnKind = "expense" | "income" | "wash" | "transfer" | "unknown";
 export type BankTxnMatchStatus = "matched" | "unmatched" | "na";

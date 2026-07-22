@@ -1,7 +1,8 @@
 "use client";
 
 import { useMemo, useState } from "react";
-import { Plus, Trash2, EyeOff, RotateCcw } from "lucide-react";
+import Link from "next/link";
+import { Plus, Trash2, EyeOff, RotateCcw, Users } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent } from "@/components/ui/card";
@@ -28,6 +29,8 @@ import type { BankAccount, Income, IncomeCategory } from "@/lib/db-types";
 const CATEGORIES: IncomeCategory[] = [
   "헌금",
   "회비",
+  "수련회비",
+  "QT도서비",
   "전도금",
   "지원금",
   "잡수입",
@@ -223,6 +226,11 @@ export function IncomeClient({
       >
         <Plus className="h-4 w-4" /> 수입 직접 추가
       </Button>
+      <Link href="/admin/income/payers" className="block">
+        <Button variant="outline" className="w-full">
+          <Users className="h-4 w-4" /> 납부자 현황 (수련회비 · QT도서비)
+        </Button>
+      </Link>
       <p className="px-1 text-xs text-muted-foreground">
         통장에 찍힌 입금은 업로드 시 자동 등록됩니다(중복 추가 금지). 직접 추가는
         통장에 없는 수입(예: 미입금 현금 헌금)에만 사용하세요.
