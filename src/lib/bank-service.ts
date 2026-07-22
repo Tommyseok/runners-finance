@@ -29,11 +29,19 @@ export interface ImportSummary {
   incomeCreated: number;
 }
 
-/** 입금行의 수입 항목 추정 */
-export function guessIncomeCategory(counterparty: string, memo: string): IncomeCategory {
+/** 입금行의 수입 항목 추정. 금액 관례: 60,000=수련회비, 10,000=QT도서비 */
+export function guessIncomeCategory(
+  counterparty: string,
+  memo: string,
+  amount = 0,
+): IncomeCategory {
   const s = `${counterparty} ${memo}`;
   if (/(헌금|십일조|감사|주일|선교|작정)/.test(s)) return "헌금";
-  if (/(회비|수련회비|참가비)/.test(s)) return "회비";
+  if (/(수련회|참가비)/.test(s)) return "수련회비";
+  if (/(큐티|QT|도서)/i.test(s)) return "QT도서비";
+  if (amount === 60000) return "수련회비";
+  if (amount === 10000) return "QT도서비";
+  if (/회비/.test(s)) return "회비";
   if (/전도금/.test(s)) return "전도금";
   if (/(지원|보조|지정)/.test(s)) return "지원금";
   if (/(이자|환급|잡수입)/.test(s)) return "잡수입";
@@ -263,7 +271,7 @@ export async function deriveIncome(admin: Admin, orgId: string): Promise<number>
       org_id: orgId,
       income_date: (t.txn_at ?? "").slice(0, 10),
       amount: t.deposit,
-      category: guessIncomeCategory(t.counterparty ?? "", t.memo ?? ""),
+      category: guessIncomeCategory(t.counterparty ?? "", t.memo ?? "", t.deposit),
       source: "bank" as const,
       deposit_to_bank_id: t.bank_account_id,
       bank_transaction_id: t.id,
