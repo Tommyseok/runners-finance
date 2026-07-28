@@ -18,6 +18,8 @@ type Admin = ReturnType<typeof createAdminClient>;
 
 export interface ImportSummary {
   batchId: string;
+  /** 자동 인식된 계좌 라벨 (예: "교회 통장 (033)") */
+  accountLabel: string;
   rowCount: number;
   inserted: number;
   duplicates: number;
@@ -58,14 +60,48 @@ function classifyKind(t: {
 /** .xls 버퍼 → 파싱 → 저장(멱등) → 자동대사 → 수입 자동추출 */
 export async function importBankFile(params: {
   orgId: string;
-  bankAccountId: string;
+  /** 미지정 시 파일 내 계좌번호로 자동 인식 */
+  bankAccountId?: string;
   fileName: string;
   buffer: Buffer;
   importedBy: string;
 }): Promise<ImportSummary> {
-  const { orgId, bankAccountId, fileName, buffer, importedBy } = params;
+  const { orgId, fileName, buffer, importedBy } = params;
   const admin = createAdminClient();
   const parsed: ParsedBankFile = parseBankXls(buffer);
+
+  // 계좌 자동 인식: 파일 meta의 계좌번호 ↔ bank_account.account_no (숫자만 비교).
+  // 계좌를 지정해 온 경우에도 파일 계좌번호와 다르면 차단(잘못된 계좌 업로드 방지).
+  const digits = (s: string | null | undefined) => (s ?? "").replace(/\D/g, "");
+  const fileAcct = digits(parsed.meta.accountNo);
+  const { data: accountsRaw } = await admin
+    .from("bank_account")
+    .select("id,label,account_no")
+    .eq("org_id", orgId);
+  const accounts = accountsRaw ?? [];
+  let bankAccountId: string;
+  let accountLabel: string;
+  if (params.bankAccountId) {
+    const acc = accounts.find((a) => a.id === params.bankAccountId);
+    if (!acc) throw new Error("선택한 계좌를 찾을 수 없습니다.");
+    if (fileAcct && digits(acc.account_no) && fileAcct !== digits(acc.account_no)) {
+      throw new Error(
+        `파일의 계좌번호(끝 ${fileAcct.slice(-3)})가 선택한 계좌(${acc.label})와 다릅니다. 파일을 확인하세요.`,
+      );
+    }
+    bankAccountId = acc.id;
+    accountLabel = acc.label;
+  } else {
+    if (!fileAcct) {
+      throw new Error("파일에서 계좌번호를 읽을 수 없습니다. KB 거래내역 .xls 원본인지 확인하세요.");
+    }
+    const acc = accounts.find((a) => digits(a.account_no) === fileAcct);
+    if (!acc) {
+      throw new Error(`파일의 계좌번호(끝 ${fileAcct.slice(-3)})와 일치하는 등록 계좌가 없습니다.`);
+    }
+    bankAccountId = acc.id;
+    accountLabel = acc.label;
+  }
 
   const withdrawTotal = parsed.txns.reduce((s, t) => s + t.withdraw, 0);
   const depositTotal = parsed.txns.reduce((s, t) => s + t.deposit, 0);
@@ -126,6 +162,7 @@ export async function importBankFile(params: {
 
   return {
     batchId: batch.id,
+    accountLabel,
     rowCount: parsed.txns.length,
     inserted,
     duplicates: parsed.txns.length - inserted,
