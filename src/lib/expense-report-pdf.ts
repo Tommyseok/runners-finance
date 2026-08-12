@@ -150,6 +150,10 @@ export async function renderExpenseReportPdf(data: ExpenseReportData): Promise<B
   const range = pdf.bufferedPageRange();
   for (let p = 0; p < range.count; p += 1) {
     pdf.switchToPage(range.start + p);
+    // 푸터는 하단 여백 안에 그린다. bottom margin을 잠시 0으로 두지 않으면
+    // pdfkit이 여백 침범을 페이지 넘침으로 보고 페이지마다 빈 페이지를 추가한다.
+    const prevBottomMargin = pdf.page.margins.bottom;
+    pdf.page.margins.bottom = 0;
     pdf
       .font("KR")
       .fontSize(8)
@@ -160,6 +164,7 @@ export async function renderExpenseReportPdf(data: ExpenseReportData): Promise<B
         pdf.page.height - MARGIN + 2,
         { width: TABLE_W, align: "center" },
       );
+    pdf.page.margins.bottom = prevBottomMargin;
   }
 
   pdf.end();
