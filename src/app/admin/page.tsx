@@ -1,5 +1,6 @@
 import Link from "next/link";
 import {
+  Calculator,
   ChevronRight,
   CreditCard,
   ListChecks,
@@ -185,6 +186,7 @@ export default async function AdminHomePage() {
           <AdminLink href="/admin/bank" icon={Landmark} label="통장 내역·대사" />
           <AdminLink href="/admin/income" icon={ArrowUpCircle} label="수입 관리" />
           <AdminLink href="/admin/reports" icon={FileText} label="지출증빙 PDF" />
+          <AdminLink href="/settlement" icon={Calculator} label="결산" />
           <AdminLink href="/admin/payments" icon={ListChecks} label="송금 처리" />
           <AdminLink href="/admin/categories" icon={Tags} label="카테고리" />
           <AdminLink href="/admin/banks" icon={CreditCard} label="통장 계좌" />

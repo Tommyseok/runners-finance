@@ -112,6 +112,12 @@ export default async function LedgerPage({
           ))}
         </div>
 
+        <div className="flex items-center justify-end">
+          <Link href="/settlement" className="text-xs font-medium text-primary">
+            결산 보기 →
+          </Link>
+        </div>
+
         {isAdmin && <LedgerExcelButton month={month} />}
 
         {/* 거래 목록 */}

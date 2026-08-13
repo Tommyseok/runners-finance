@@ -51,11 +51,18 @@ export interface LedgerMonth {
   expenseTotal: number;
 }
 
-/** 월별 통합원장 (입금/출금). month='all'이면 전체. */
+/** 일자 범위 (YYYY-MM-DD, to 포함). from/to가 있으면 month보다 우선. */
+export interface LedgerRange {
+  from?: string;
+  to?: string;
+}
+
+/** 월별 통합원장 (입금/출금). month='all'이면 전체. range가 있으면 month 무시. */
 export async function getLedgerEntries(
   supabase: SupabaseClient,
   orgId: string,
   month: string,
+  range?: LedgerRange,
 ): Promise<LedgerMonth> {
   let query = supabase
     .from("ledger_entry")
@@ -63,7 +70,10 @@ export async function getLedgerEntries(
     .eq("org_id", orgId)
     .order("txn_at", { ascending: false });
 
-  if (month && month !== "all") {
+  if (range?.from || range?.to) {
+    if (range.from) query = query.gte("txn_date", range.from);
+    if (range.to) query = query.lte("txn_date", range.to);
+  } else if (month && month !== "all") {
     const [y, m] = month.split("-").map(Number);
     if (y && m) {
       const start = `${y}-${String(m).padStart(2, "0")}-01`;
@@ -75,8 +85,15 @@ export async function getLedgerEntries(
     }
   }
 
-  const { data } = await query;
-  const entries = (data ?? []) as LedgerEntry[];
+  // PostgREST 기본 max-rows(1000)에 걸려 전체기간 결산이 조용히 잘리지 않도록 페이지 단위로 전부 가져온다.
+  const PAGE = 1000;
+  const entries: LedgerEntry[] = [];
+  for (let offset = 0; ; offset += PAGE) {
+    const { data } = await query.range(offset, offset + PAGE - 1);
+    const page = (data ?? []) as LedgerEntry[];
+    entries.push(...page);
+    if (page.length < PAGE) break;
+  }
   // 잘못입금/내부이체는 수입·지출 합계에서 제외
   const real = entries.filter((e) => e.kind !== "wash" && e.kind !== "transfer");
   const incomeTotal = real
@@ -115,8 +132,9 @@ export async function getEnrichedLedger(
   supabase: SupabaseClient,
   orgId: string,
   month: string,
+  range?: LedgerRange,
 ): Promise<EnrichedLedgerEntry[]> {
-  const { entries } = await getLedgerEntries(supabase, orgId, month);
+  const { entries } = await getLedgerEntries(supabase, orgId, month, range);
 
   const receiptIds = Array.from(
     new Set(entries.map((e) => e.matched_receipt_id).filter(Boolean) as string[]),
