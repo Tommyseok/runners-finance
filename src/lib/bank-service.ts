@@ -223,6 +223,38 @@ export async function reconcileOrg(
 
   const results = reconcileBank(reconTxns, receipts);
 
+  // 묶음 구성(bank_txn_link) 동기화 준비 — 마이그레이션 전이면 링크 저장은 건너뛴다.
+  const receiptAmountById = new Map(receiptRows.map((r) => [r.id, r.total_amount]));
+  let linksAvailable = true;
+  // txnId → (receiptId → amount). 주의: locked 거래의 링크는 아래 루프에서 건너뛰므로 동결됨.
+  const existingLinks = new Map<string, Map<string, number>>();
+  {
+    const PAGE = 1000;
+    for (let offset = 0; ; offset += PAGE) {
+      const { data: linkRows, error: linkErr } = await admin
+        .from("bank_txn_link")
+        .select("bank_transaction_id, receipt_id, amount")
+        .eq("org_id", orgId)
+        .order("id")
+        .range(offset, offset + PAGE - 1);
+      if (linkErr) {
+        linksAvailable = false; // 마이그레이션 전 — 링크 저장 생략
+        break;
+      }
+      const page = (linkRows ?? []) as {
+        bank_transaction_id: string;
+        receipt_id: string;
+        amount: number;
+      }[];
+      for (const l of page) {
+        const map = existingLinks.get(l.bank_transaction_id) ?? new Map<string, number>();
+        map.set(l.receipt_id, l.amount);
+        existingLinks.set(l.bank_transaction_id, map);
+      }
+      if (page.length < PAGE) break;
+    }
+  }
+
   let matched = 0;
   let unmatched = 0;
   const updates: Array<Promise<unknown>> = [];
@@ -252,6 +284,38 @@ export async function reconcileOrg(
             .eq("id", txn.id);
         })(),
       );
+    }
+    // 묶음 구성 동기화 — 매칭된 지출은 구성 영수증 전체를 링크로 보존 (결산 계정 분리용)
+    if (linksAvailable) {
+      const desired =
+        res.kind === "expense" && res.matchStatus === "matched"
+          ? res.matchedReceiptIds
+          : [];
+      const current = existingLinks.get(txn.id) ?? new Map<string, number>();
+      const same =
+        desired.length === current.size &&
+        desired.every((id) => current.get(id) === (receiptAmountById.get(id) ?? 0));
+      if (!same) {
+        updates.push(
+          (async () => {
+            await admin
+              .from("bank_txn_link")
+              .delete()
+              .eq("org_id", orgId)
+              .eq("bank_transaction_id", txn.id);
+            if (desired.length > 0) {
+              await admin.from("bank_txn_link").insert(
+                desired.map((receiptId) => ({
+                  org_id: orgId,
+                  bank_transaction_id: txn.id,
+                  receipt_id: receiptId,
+                  amount: receiptAmountById.get(receiptId) ?? 0,
+                })),
+              );
+            }
+          })(),
+        );
+      }
     }
   }
   await Promise.all(updates);

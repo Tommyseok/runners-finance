@@ -119,6 +119,10 @@ function addSummarySheet(
   r += 1;
   ws.getRow(r).getCell(1).value = "* 자체 통장 = 신한 017, 교회 통장 = 국민 033";
   ws.getRow(r).getCell(1).font = NOTE_FONT;
+  r += 1;
+  ws.getRow(r).getCell(1).value =
+    "* 여러 영수증을 묶어 정산한 출금은 구성 영수증의 계정항목으로 분리 집계 (건수 = 분리 후 기준)";
+  ws.getRow(r).getCell(1).font = NOTE_FONT;
 
   ws.views = [{ state: "frozen", ySplit: 4 }];
 }

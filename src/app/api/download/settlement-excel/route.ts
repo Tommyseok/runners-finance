@@ -43,7 +43,7 @@ export async function POST(req: Request) {
 
   const admin = createAdminClient();
   const data = await getSettlementData(admin, orgId, month, range);
-  const details = buildSettlementDetails(data.entries);
+  const details = buildSettlementDetails(data.splitEntries);
   const wb = buildSettlementWorkbook(data, details, periodLabel);
 
   const buffer = Buffer.from(await wb.xlsx.writeBuffer());

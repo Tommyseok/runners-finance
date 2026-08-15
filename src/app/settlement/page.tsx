@@ -36,7 +36,7 @@ export default async function SettlementPage({
   const presetId = range ? (searchParams.preset ?? "custom") : "all";
 
   const data = await getSettlementData(supabase, orgId, "all", range);
-  const details = buildSettlementDetails(data.entries);
+  const details = buildSettlementDetails(data.splitEntries);
   const t = data.summaryTotals;
   const nonCash = data.summary.find((s) => s.category === "(비지출)");
   const checkIncomeDiff =
@@ -100,8 +100,11 @@ export default async function SettlementPage({
         {/* 계정항목요약 */}
         <Card>
           <CardContent className="p-0">
-            <div className="border-b px-4 py-3 text-sm font-semibold">
-              계정항목별 요약
+            <div className="border-b px-4 py-3">
+              <div className="text-sm font-semibold">계정항목별 요약</div>
+              <div className="mt-0.5 text-[11px] text-muted-foreground">
+                여러 영수증을 묶어 정산한 출금은 영수증의 계정항목으로 분리 집계 (건수 = 분리 후 기준)
+              </div>
             </div>
             {data.summary.length === 0 ? (
               <div className="p-8 text-center text-sm text-muted-foreground">
