@@ -350,6 +350,63 @@ export async function getSettlementData(
   };
 }
 
+export interface IncomeGroupRow {
+  label: string;
+  count: number;
+  amount: number;
+}
+
+export interface IncomeDetail {
+  /** 수입 엔트리 (최신순), category는 분류 라벨로 치환됨 */
+  entries: EnrichedLedgerEntry[];
+  groups: IncomeGroupRow[];
+  total: number;
+}
+
+/**
+ * 수입 분류 규칙:
+ * - 헌금 + 적요에 '주일' → "주일헌금"
+ * - 헌금(주일 외) + 4~9월 입금 → "여름수련회 후원금", 10~3월 입금 → "겨울수련회 후원금"
+ * - 그 외는 수입 계정 그대로 (수련회비·회비·지원금 등)
+ */
+export function classifyIncome(e: EnrichedLedgerEntry): string {
+  if (e.category !== "헌금") return e.category || "-";
+  if ((e.content ?? "").includes("주일")) return "주일헌금";
+  const month = Number(e.txnDate.slice(5, 7));
+  return month >= 4 && month <= 9 ? "여름수련회 후원금" : "겨울수련회 후원금";
+}
+
+const INCOME_GROUP_ORDER = [
+  "수련회비",
+  "여름수련회 후원금",
+  "겨울수련회 후원금",
+  "주일헌금",
+];
+
+/** 수입 시트 데이터 — wash/transfer 제외 실수입을 분류별로 집계. */
+export function buildIncomeDetail(entries: EnrichedLedgerEntry[]): IncomeDetail {
+  const incomes = entries.filter(
+    (e) => e.direction === "income" && e.kind !== "wash" && e.kind !== "transfer",
+  );
+  const labeled = incomes.map((e) => ({ ...e, category: classifyIncome(e) }));
+  const groupMap = new Map<string, { count: number; amount: number }>();
+  for (const e of labeled) {
+    const prev = groupMap.get(e.category) ?? { count: 0, amount: 0 };
+    groupMap.set(e.category, { count: prev.count + 1, amount: prev.amount + e.deposit });
+  }
+  const ordered = INCOME_GROUP_ORDER.filter((l) => groupMap.has(l));
+  const rest = Array.from(groupMap.keys())
+    .filter((l) => !INCOME_GROUP_ORDER.includes(l))
+    .sort((a, b) => (groupMap.get(b)?.amount ?? 0) - (groupMap.get(a)?.amount ?? 0));
+  const groups: IncomeGroupRow[] = [...ordered, ...rest].map((label) => ({
+    label,
+    count: groupMap.get(label)!.count,
+    amount: groupMap.get(label)!.amount,
+  }));
+  const total = groups.reduce((s, g) => s + g.amount, 0);
+  return { entries: labeled, groups, total };
+}
+
 /** 고정 상세 시트 데이터 — 지출 엔트리 필터(최신순 유지) + 계좌별 구분. */
 export function buildSettlementDetails(
   entries: EnrichedLedgerEntry[],

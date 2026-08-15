@@ -5,10 +5,12 @@ import {
   drawLedgerHeaderRow,
   HEADER_FILL,
 } from "@/lib/ledger-excel";
-import type {
-  SettlementCategoryRow,
-  SettlementData,
-  SettlementDetail,
+import {
+  buildIncomeDetail,
+  type IncomeDetail,
+  type SettlementCategoryRow,
+  type SettlementData,
+  type SettlementDetail,
 } from "@/lib/settlement";
 
 const NOTE_FONT = { italic: true, color: { argb: "FF595959" } };
@@ -33,11 +35,89 @@ export function buildSettlementWorkbook(
 
   addSummarySheet(wb, data, periodLabel);
 
+  addIncomeSheet(wb, data.orgName, periodLabel, buildIncomeDetail(data.entries));
+
   for (const detail of details) {
     addDetailSheet(wb, data.orgName, detail);
   }
 
   return wb;
+}
+
+/** 수입 시트 — 분류별 요약(주일헌금/여름·겨울수련회 후원금 분리) + 입금 상세. */
+function addIncomeSheet(
+  wb: ExcelJS.Workbook,
+  orgName: string,
+  periodLabel: string,
+  income: IncomeDetail,
+): void {
+  const ws = wb.addWorksheet("수입");
+
+  ws.mergeCells("A1:J1");
+  ws.getCell("A1").value = `${orgName} 수입 현황 (${periodLabel})`;
+  ws.getCell("A1").font = { bold: true, size: 14 };
+  ws.mergeCells("A2:J2");
+  ws.getCell("A2").value =
+    `실수입 합계 ${income.total.toLocaleString("ko-KR")}원  |  ${income.entries.length}건   (비지출·이체 제외)`;
+  ws.getCell("A2").font = NOTE_FONT;
+
+  // 분류별 요약
+  const sumHeaders = ["분류", "건수", "금액"];
+  const sumHeaderRow = ws.getRow(4);
+  sumHeaders.forEach((h, i) => {
+    const cell = sumHeaderRow.getCell(i + 1);
+    cell.value = h;
+    cell.font = { bold: true, color: { argb: "FFFFFFFF" } };
+    cell.fill = HEADER_FILL;
+    cell.alignment = { horizontal: "center", vertical: "middle" };
+  });
+  let r = 5;
+  for (const g of income.groups) {
+    const row = ws.getRow(r);
+    row.getCell(1).value = g.label;
+    row.getCell(2).value = g.count;
+    row.getCell(3).value = g.amount;
+    row.getCell(2).alignment = { horizontal: "center" };
+    row.getCell(3).numFmt = "#,##0";
+    r += 1;
+  }
+  const totalRow = ws.getRow(r);
+  totalRow.getCell(1).value = "합계";
+  totalRow.getCell(2).value = income.entries.length;
+  totalRow.getCell(3).value = income.total;
+  totalRow.getCell(2).alignment = { horizontal: "center" };
+  totalRow.getCell(3).numFmt = "#,##0";
+  for (let c = 1; c <= 3; c += 1) totalRow.getCell(c).font = { bold: true };
+  r += 1;
+  ws.getRow(r).getCell(1).value =
+    "* 후원금 분류: '헌금' 중 적요에 '주일'이 없는 입금 — 4~9월 입금은 여름수련회, 10~3월 입금은 겨울수련회 후원금 (추정 기준)";
+  ws.getRow(r).getCell(1).font = NOTE_FONT;
+  r += 2;
+
+  // 입금 상세 (원장 형식, 계정항목 열 = 분류)
+  ws.getRow(r).getCell(1).value = "입금 상세";
+  ws.getRow(r).getCell(1).font = { bold: true };
+  r += 1;
+  const headerRowNo = r;
+  drawLedgerHeaderRow(ws, headerRowNo, "누계");
+  r += 1;
+  let cumulative = 0;
+  for (const e of income.entries) {
+    cumulative += e.deposit;
+    drawLedgerEntryRow(ws, r, e, cumulative, false);
+    r += 1;
+  }
+  const detailTotal = ws.getRow(r + 1);
+  detailTotal.getCell(3).value = "합계";
+  detailTotal.getCell(3).font = { bold: true };
+  detailTotal.getCell(4).value = income.total;
+  detailTotal.getCell(4).numFmt = "#,##0";
+  detailTotal.getCell(4).font = { bold: true };
+
+  ws.autoFilter = {
+    from: { row: headerRowNo, column: 1 },
+    to: { row: headerRowNo, column: 12 },
+  };
 }
 
 /** 맨 앞 안내 시트 — 결산 자료를 처음 보는 사람을 위한 읽는 방법. */
@@ -54,7 +134,8 @@ function addGuideSheet(wb: ExcelJS.Workbook, orgName: string, periodLabel: strin
     ["■ 문서 구성", true],
     ["① 입출금원장_전체 — 통장 입출금 사실 그대로 (출금 1건 = 1행)", false],
     ["② 계정항목요약 — 계정항목별 수입·지출 합계와 검증", false],
-    ["③ 항목별 상세 시트 — 여름수련회·겨울수련회·소그룹운영비 등 주요 지출 항목의 세부 내역", false],
+    ["③ 수입 — 분류별 수입 요약(주일헌금 / 여름·겨울수련회 후원금 / 수련회비 등)과 입금 상세", false],
+    ["④ 항목별 상세 시트 — 여름수련회·겨울수련회·소그룹운영비 등 주요 지출 항목의 세부 내역", false],
     ["", false],
     ["■ 회계 처리 기준 (중요)", true],
     ["· 원장 시트는 통장 기준입니다. 여러 영수증을 묶어 한 번에 송금한 출금은 원장에 1행으로 표시되고,", false],
