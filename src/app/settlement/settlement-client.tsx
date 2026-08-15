@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import { useRouter } from "next/navigation";
-import { FileArchive, FileDown, Loader2 } from "lucide-react";
+import { FileArchive, FileDown, Loader2, Megaphone } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -54,12 +54,14 @@ export function SettlementClient({
   periodLabel,
   presetId,
   isAdmin,
+  publication,
 }: {
   from?: string;
   to?: string;
   periodLabel: string;
   presetId: string;
   isAdmin: boolean;
+  publication: { periodLabel: string; publishedAt: string } | null;
 }) {
   const router = useRouter();
   const presets = buildPresets();
@@ -68,6 +70,7 @@ export function SettlementClient({
   const [customOpen, setCustomOpen] = useState(presetId === "custom");
   const [busy, setBusy] = useState(false);
   const [zipBusy, setZipBusy] = useState(false);
+  const [pubBusy, setPubBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   function applyPreset(p: Preset) {
@@ -87,6 +90,36 @@ export function SettlementClient({
     router.push(
       `/settlement?from=${customFrom}&to=${customTo}&preset=custom&label=${encodeURIComponent(`${customFrom} ~ ${customTo}`)}`,
     );
+  }
+
+  async function publish(action: "publish" | "unpublish") {
+    if (
+      action === "publish" &&
+      !window.confirm(
+        `"${periodLabel}" 결산을 교사(일반 회원)에게 게시할까요?\n게시하면 회원 초기화면에 결산 요약 공지가 표시됩니다.`,
+      )
+    ) {
+      return;
+    }
+    setError(null);
+    setPubBusy(true);
+    try {
+      const res = await fetch("/api/settlement/publish", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ from, to, periodLabel, action }),
+      });
+      if (!res.ok) {
+        const j = await res.json().catch(() => ({}));
+        setError(j.error ?? "게시 처리에 실패했습니다.");
+        return;
+      }
+      router.refresh();
+    } catch {
+      setError("네트워크 오류가 발생했습니다.");
+    } finally {
+      setPubBusy(false);
+    }
   }
 
   async function download() {
@@ -224,6 +257,34 @@ export function SettlementClient({
                 <><FileArchive className="h-4 w-4" /> 증빙 PDF 일괄 다운로드 (ZIP)</>
               )}
             </Button>
+            <Button
+              onClick={() => publish("publish")}
+              disabled={pubBusy}
+              variant="outline"
+              className="w-full"
+            >
+              {pubBusy ? (
+                <><Loader2 className="h-4 w-4 animate-spin" /> 게시 처리 중…</>
+              ) : (
+                <><Megaphone className="h-4 w-4" /> 결산완료 후 교사대상 게시 ({periodLabel})</>
+              )}
+            </Button>
+            {publication && (
+              <div className="flex items-center justify-between rounded-md border border-green-200 bg-green-50 px-3 py-2 text-xs text-green-800">
+                <span>
+                  게시됨: {publication.periodLabel} ·{" "}
+                  {publication.publishedAt.slice(0, 10)}
+                </span>
+                <button
+                  type="button"
+                  onClick={() => publish("unpublish")}
+                  disabled={pubBusy}
+                  className="font-medium underline"
+                >
+                  게시 취소
+                </button>
+              </div>
+            )}
           </div>
         )}
       </CardContent>

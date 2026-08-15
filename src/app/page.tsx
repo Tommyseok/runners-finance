@@ -8,6 +8,7 @@ import { formatCurrency, formatDate } from "@/lib/utils";
 import { getBankBalances } from "@/lib/ledger";
 import type { Organization, Receipt as ReceiptT } from "@/lib/db-types";
 import { WelcomeBanner } from "./welcome-banner";
+import { SettlementNoticeCard, type SettlementNotice } from "./settlement-notice-card";
 
 export const dynamic = "force-dynamic";
 
@@ -54,6 +55,39 @@ export default async function HomePage({
   const hasBalances = balances.some((b) => b.balance !== null);
   const totalBalance = balances.reduce((s, b) => s + (b.balance ?? 0), 0);
 
+  // 결산 게시 공지 (관리자가 게시한 경우만. 테이블 미존재 등 오류는 무시 — 홈은 항상 렌더)
+  let notice: SettlementNotice | null = null;
+  {
+    const { data: pub } = await supabase
+      .from("settlement_publication")
+      .select("period_label, date_from, date_to, income_total, expense_total, summary, published_at")
+      .eq("org_id", profile.org_id!)
+      .eq("is_active", true)
+      .order("published_at", { ascending: false })
+      .limit(1)
+      .maybeSingle();
+    if (pub) {
+      const p = pub as {
+        period_label: string;
+        date_from: string | null;
+        date_to: string | null;
+        income_total: number;
+        expense_total: number;
+        summary: { expenseRows?: Array<{ category: string; amount: number }> } | null;
+        published_at: string;
+      };
+      notice = {
+        periodLabel: p.period_label,
+        dateFrom: p.date_from,
+        dateTo: p.date_to,
+        incomeTotal: p.income_total,
+        expenseTotal: p.expense_total,
+        publishedAt: p.published_at,
+        expenseRows: p.summary?.expenseRows ?? [],
+      };
+    }
+  }
+
   return (
     <AppShell isAdmin={profile.role === "admin"}>
       {searchParams.welcome === "1" && <WelcomeBanner orgName={orgName} />}
@@ -65,6 +99,8 @@ export default async function HomePage({
       </div>
 
       <div className="space-y-3 px-4">
+        {notice && <SettlementNoticeCard notice={notice} />}
+
         <Link href="/receipts/new">
           <Card className="bg-primary text-primary-foreground transition-transform active:scale-[0.99]">
             <CardContent className="flex items-center justify-between p-5">

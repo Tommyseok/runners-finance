@@ -14,13 +14,13 @@ export const SETTLEMENT_DETAIL_SHEETS = [
   {
     sheetName: "여름수련회",
     categories: ["[훈련비] 여름수련회"],
-    // 시트 하단 수입·지출 밸런스에 포함할 수입 계정 (기간 내 합계)
-    incomeCategories: ["수련회비"],
+    // 시트 하단 수입·지출 밸런스: 해당 시즌의 수련회비·후원금만 집계
+    season: "summer",
   },
   {
     sheetName: "겨울수련회",
     categories: ["[훈련비] 겨울수련회"],
-    incomeCategories: ["수련회비"],
+    season: "winter",
   },
   { sheetName: "소그룹운영비", categories: ["[운영비] 소그룹"] },
   { sheetName: "찬양팀지원비", categories: ["[운영비] 찬양팀"] },
@@ -74,8 +74,8 @@ export interface SettlementDetail {
   count: number;
   expenseTotal: number;
   byAccount: DetailAccountRow[];
-  /** incomeCategories가 설정된 시트만: 기간 내 수입 구성 (수련회비 / 후원금 분리) */
-  incomeCategories?: readonly string[];
+  /** season이 설정된 시트만: 해당 시즌 수련회비·후원금 밸런스 */
+  season?: "summer" | "winter";
   incomeLines?: Array<{ label: string; amount: number; note?: string }>;
   incomeTotal?: number;
 }
@@ -363,22 +363,32 @@ export interface IncomeDetail {
   total: number;
 }
 
+/** 입금 월 기준 시즌: 4~9월 = 여름, 10~3월 = 겨울 */
+function seasonOf(txnDate: string): "summer" | "winter" {
+  const month = Number(txnDate.slice(5, 7));
+  return month >= 4 && month <= 9 ? "summer" : "winter";
+}
+
 /**
- * 수입 분류 규칙:
+ * 수입 분류 규칙 (입금 기간 기준, 추정):
+ * - 수련회비 → 4~9월 "여름수련회비", 10~3월 "겨울수련회비"
  * - 헌금 + 적요에 '주일' → "주일헌금"
- * - 헌금(주일 외) + 4~9월 입금 → "여름수련회 후원금", 10~3월 입금 → "겨울수련회 후원금"
- * - 그 외는 수입 계정 그대로 (수련회비·회비·지원금 등)
+ * - 헌금(주일 외) → 4~9월 "여름수련회 후원금", 10~3월 "겨울수련회 후원금"
+ * - 그 외는 수입 계정 그대로 (회비·지원금 등)
  */
 export function classifyIncome(e: EnrichedLedgerEntry): string {
+  if (e.category === "수련회비") {
+    return seasonOf(e.txnDate) === "summer" ? "여름수련회비" : "겨울수련회비";
+  }
   if (e.category !== "헌금") return e.category || "-";
   if ((e.content ?? "").includes("주일")) return "주일헌금";
-  const month = Number(e.txnDate.slice(5, 7));
-  return month >= 4 && month <= 9 ? "여름수련회 후원금" : "겨울수련회 후원금";
+  return seasonOf(e.txnDate) === "summer" ? "여름수련회 후원금" : "겨울수련회 후원금";
 }
 
 const INCOME_GROUP_ORDER = [
-  "수련회비",
+  "여름수련회비",
   "여름수련회 후원금",
+  "겨울수련회비",
   "겨울수련회 후원금",
   "주일헌금",
 ];
@@ -432,24 +442,23 @@ export function buildSettlementDetails(
         share: expenseTotal > 0 ? v.amount / expenseTotal : 0,
       }))
       .sort((a, b) => b.amount - a.amount);
-    const incomeCategories =
-      "incomeCategories" in def ? (def.incomeCategories as readonly string[]) : undefined;
+    const season = "season" in def ? (def.season as "summer" | "winter") : undefined;
     let incomeLines: SettlementDetail["incomeLines"];
     let incomeTotal: number | undefined;
-    if (incomeCategories) {
+    if (season) {
+      const prefix = season === "summer" ? "여름" : "겨울";
       const realIncome = entries.filter(
         (e) => e.direction === "income" && e.kind !== "wash" && e.kind !== "transfer",
       );
-      const feeTotal = realIncome
-        .filter((e) => e.category === "수련회비")
-        .reduce((s, e) => s + e.deposit, 0);
-      // 후원금 = '헌금' 계정 중 적요에 '주일'이 없는 입금 (정기 주일헌금 제외 — 추정 기준)
-      const donationTotal = realIncome
-        .filter((e) => e.category === "헌금" && !(e.content ?? "").includes("주일"))
-        .reduce((s, e) => s + e.deposit, 0);
+      const sumOf = (label: string) =>
+        realIncome
+          .filter((e) => classifyIncome(e) === label)
+          .reduce((s, e) => s + e.deposit, 0);
+      const feeTotal = sumOf(`${prefix}수련회비`);
+      const donationTotal = sumOf(`${prefix}수련회 후원금`);
       incomeLines = [
-        { label: "수입 · 수련회비", amount: feeTotal },
-        { label: "수입 · 후원금 (주일헌금 외 헌금)", amount: donationTotal },
+        { label: `수입 · ${prefix}수련회비`, amount: feeTotal },
+        { label: `수입 · ${prefix}수련회 후원금 (주일헌금 외 헌금)`, amount: donationTotal },
       ];
       incomeTotal = feeTotal + donationTotal;
     }
@@ -460,7 +469,7 @@ export function buildSettlementDetails(
       count: detailEntries.length,
       expenseTotal,
       byAccount,
-      incomeCategories,
+      season,
       incomeLines,
       incomeTotal,
     };

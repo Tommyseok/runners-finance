@@ -37,6 +37,25 @@ export default async function SettlementPage({
 
   const data = await getSettlementData(supabase, orgId, "all", range);
   const details = buildSettlementDetails(data.splitEntries);
+
+  // 활성 게시 (마이그레이션 전이면 테이블이 없을 수 있으므로 오류는 무시)
+  let publication: { periodLabel: string; publishedAt: string } | null = null;
+  {
+    const { data: pub } = await supabase
+      .from("settlement_publication")
+      .select("period_label, published_at")
+      .eq("org_id", orgId)
+      .eq("is_active", true)
+      .order("published_at", { ascending: false })
+      .limit(1)
+      .maybeSingle();
+    if (pub) {
+      publication = {
+        periodLabel: (pub as { period_label: string }).period_label,
+        publishedAt: (pub as { published_at: string }).published_at,
+      };
+    }
+  }
   const t = data.summaryTotals;
   const nonCash = data.summary.find((s) => s.category === "(비지출)");
   const checkIncomeDiff =
@@ -55,6 +74,7 @@ export default async function SettlementPage({
           periodLabel={periodLabel}
           presetId={presetId}
           isAdmin={isAdmin}
+          publication={publication}
         />
 
         {/* 수입/지출/순액 요약 */}

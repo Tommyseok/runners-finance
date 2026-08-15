@@ -358,11 +358,7 @@ function addDetailSheet(
       r += 1;
     }
     ws.getRow(r).getCell(1).value =
-      "* 후원금 = '헌금' 계정 중 적요에 '주일'이 없는 입금 (정기 주일헌금 제외 — 추정 기준).";
-    ws.getRow(r).getCell(1).font = NOTE_FONT;
-    r += 1;
-    ws.getRow(r).getCell(1).value =
-      "* 수입은 선택한 기간 내 합계. 수련회비·후원금은 여름·겨울 공용이므로 특정 수련회만 보려면 기간을 그 수련회 기간으로 지정해 출력.";
+      "* 여름 = 4~9월 입금, 겨울 = 10~3월 입금 기준 분류 (추정 기준). 후원금 = '헌금' 중 적요에 '주일'이 없는 입금.";
     ws.getRow(r).getCell(1).font = NOTE_FONT;
   }
 
