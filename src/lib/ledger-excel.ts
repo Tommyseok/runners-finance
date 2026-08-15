@@ -39,9 +39,9 @@ export function ledgerStatusLabel(e: EnrichedLedgerEntry): string {
         ? "수입"
         : e.matchStatus === "matched"
           ? e.hasImage === false
-            ? "매칭·사진없음"
+            ? "증빙없음"
             : "영수증매칭"
-          : "영수증없음";
+          : "증빙없음";
 }
 
 /** 매칭됐지만 증빙 사진이 없는 행 강조 (연주황) */

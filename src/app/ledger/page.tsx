@@ -165,12 +165,12 @@ export default async function LedgerPage({
                             e.kind === "expense" &&
                             e.matchStatus === "unmatched" && (
                               <Badge variant="warning" className="text-[10px]">
-                                영수증 없음
+                                증빙없음
                               </Badge>
                             )}
                           {e.matchStatus === "matched" && e.hasImage === false && (
                             <Badge variant="warning" className="text-[10px]">
-                              사진 없음
+                              증빙없음
                             </Badge>
                           )}
                         </div>
