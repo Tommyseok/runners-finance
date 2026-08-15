@@ -35,6 +35,8 @@ export function buildSettlementWorkbook(
 
   addSummarySheet(wb, data, periodLabel);
 
+  addNoEvidenceSheet(wb, data.orgName, periodLabel, data.splitEntries);
+
   addIncomeSheet(wb, data.orgName, periodLabel, buildIncomeDetail(data.entries));
 
   for (const detail of details) {
@@ -42,6 +44,63 @@ export function buildSettlementWorkbook(
   }
 
   return wb;
+}
+
+/** 증빙없음 시트 — 영수증 증빙이 없는 지출만 모아 붉은 탭으로 분리. */
+function addNoEvidenceSheet(
+  wb: ExcelJS.Workbook,
+  orgName: string,
+  periodLabel: string,
+  splitEntries: SettlementData["splitEntries"],
+): void {
+  const rows = splitEntries.filter(
+    (e) =>
+      e.direction === "expense" &&
+      e.kind === "expense" &&
+      ((e.matchStatus === "matched" && e.hasImage === false) ||
+        e.matchStatus === "unmatched"),
+  );
+  const total = rows.reduce((s, e) => s + e.withdraw, 0);
+
+  const ws = wb.addWorksheet("증빙없음", {
+    properties: { tabColor: { argb: "FFC00000" } },
+  });
+
+  ws.mergeCells("A1:J1");
+  ws.getCell("A1").value = `${orgName} 증빙 없는 지출 (${periodLabel})`;
+  ws.getCell("A1").font = { bold: true, size: 14, color: { argb: "FFC00000" } };
+  ws.mergeCells("A2:J2");
+  ws.getCell("A2").value =
+    `건수 ${rows.length}건  |  합계 ${total.toLocaleString("ko-KR")}원   (노란색 = 영수증 기록 없음 · 연주황 = 기록·대사 완료, 사진만 없음)`;
+  ws.getCell("A2").font = NOTE_FONT;
+
+  drawLedgerHeaderRow(ws, 4, "누계");
+  // 헤더를 붉은색으로 덮어쓰기
+  for (let c = 1; c <= 12; c += 1) {
+    ws.getRow(4).getCell(c).fill = {
+      type: "pattern",
+      pattern: "solid",
+      fgColor: { argb: "FFC00000" },
+    };
+  }
+
+  let r = 5;
+  let cumulative = 0;
+  for (const e of rows) {
+    cumulative += e.withdraw;
+    drawLedgerEntryRow(ws, r, e, cumulative);
+    r += 1;
+  }
+
+  const totalRow = ws.getRow(r + 1);
+  totalRow.getCell(3).value = "합계";
+  totalRow.getCell(3).font = { bold: true };
+  totalRow.getCell(5).value = total;
+  totalRow.getCell(5).numFmt = "#,##0";
+  totalRow.getCell(5).font = { bold: true };
+
+  ws.views = [{ state: "frozen", ySplit: 4 }];
+  ws.autoFilter = { from: { row: 4, column: 1 }, to: { row: 4, column: 12 } };
 }
 
 /** 수입 시트 — 분류별 요약(주일헌금/여름·겨울수련회 후원금 분리) + 입금 상세. */
@@ -134,8 +193,9 @@ function addGuideSheet(wb: ExcelJS.Workbook, orgName: string, periodLabel: strin
     ["■ 문서 구성", true],
     ["① 입출금원장_전체 — 통장 입출금 사실 그대로 (출금 1건 = 1행)", false],
     ["② 계정항목요약 — 계정항목별 수입·지출 합계와 검증", false],
-    ["③ 수입 — 분류별 수입 요약(주일헌금 / 여름·겨울수련회 후원금 / 수련회비 등)과 입금 상세", false],
-    ["④ 항목별 상세 시트 — 여름수련회·겨울수련회·소그룹운영비 등 주요 지출 항목의 세부 내역", false],
+    ["③ 증빙없음(붉은 탭) — 영수증 증빙이 없는 지출만 모은 시트", false],
+    ["④ 수입 — 분류별 수입 요약(주일헌금 / 여름·겨울수련회 후원금 / 수련회비 등)과 입금 상세", false],
+    ["⑤ 항목별 상세 시트 — 여름수련회·겨울수련회·소그룹운영비 등 주요 지출 항목의 세부 내역", false],
     ["", false],
     ["■ 회계 처리 기준 (중요)", true],
     ["· 원장 시트는 통장 기준입니다. 여러 영수증을 묶어 한 번에 송금한 출금은 원장에 1행으로 표시되고,", false],
