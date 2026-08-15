@@ -168,6 +168,11 @@ export default async function LedgerPage({
                                 영수증 없음
                               </Badge>
                             )}
+                          {e.matchStatus === "matched" && e.hasImage === false && (
+                            <Badge variant="warning" className="text-[10px]">
+                              사진 없음
+                            </Badge>
+                          )}
                         </div>
                         {e.content && e.content !== "-" && (
                           <div className="mt-0.5 truncate text-xs text-muted-foreground">

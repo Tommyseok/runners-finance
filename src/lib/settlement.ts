@@ -173,13 +173,21 @@ async function splitByTxnLinks(
     new Set(Array.from(linksByTxn.values()).flat().map((l) => l.receipt_id)),
   );
   const receiptById = new Map<string, LinkedReceiptInfo>();
+  const imageReceiptIds = new Set<string>();
   for (let i = 0; i < receiptIds.length; i += 100) {
-    const { data } = await supabase
-      .from("receipt")
-      .select("id, receipt_no, merchant, category_id, user_id")
-      .eq("org_id", orgId)
-      .in("id", receiptIds.slice(i, i + 100));
+    const slice = receiptIds.slice(i, i + 100);
+    const [{ data }, { data: imgRows }] = await Promise.all([
+      supabase
+        .from("receipt")
+        .select("id, receipt_no, merchant, category_id, user_id")
+        .eq("org_id", orgId)
+        .in("id", slice),
+      supabase.from("receipt_image").select("receipt_id").in("receipt_id", slice),
+    ]);
     for (const r of (data ?? []) as LinkedReceiptInfo[]) receiptById.set(r.id, r);
+    for (const row of (imgRows ?? []) as { receipt_id: string }[]) {
+      imageReceiptIds.add(row.receipt_id);
+    }
   }
   const { data: catRows } = await supabase
     .from("budget_category")
@@ -224,6 +232,7 @@ async function splitByTxnLinks(
         content: r?.merchant ?? e.content,
         receiptNo: r?.receipt_no ?? null,
         payer: r ? (userNameById.get(r.user_id) ?? null) : e.payer,
+        hasImage: r ? imageReceiptIds.has(r.id) : e.hasImage,
       });
     }
     if (linkedSum < e.withdraw) {

@@ -38,9 +38,18 @@ export function ledgerStatusLabel(e: EnrichedLedgerEntry): string {
       : e.direction === "income"
         ? "수입"
         : e.matchStatus === "matched"
-          ? "영수증매칭"
+          ? e.hasImage === false
+            ? "매칭·사진없음"
+            : "영수증매칭"
           : "영수증없음";
 }
+
+/** 매칭됐지만 증빙 사진이 없는 행 강조 (연주황) */
+export const NO_IMAGE_FILL: ExcelJS.Fill = {
+  type: "pattern",
+  pattern: "solid",
+  fgColor: { argb: "FFFCE4D6" },
+};
 
 /** 4행 헤더(11칸)를 FF2F5496 스타일로 그린다. col6Label로 잔액↔누계 전환. */
 export function drawLedgerHeaderRow(
@@ -96,6 +105,8 @@ export function drawLedgerEntryRow(
   row.getCell(12).alignment = { horizontal: "center" };
   if (highlightUnmatched && e.matchStatus === "unmatched" && e.kind === "expense") {
     for (let c = 1; c <= 12; c += 1) row.getCell(c).fill = UNMATCHED_FILL;
+  } else if (e.matchStatus === "matched" && e.hasImage === false) {
+    for (let c = 1; c <= 12; c += 1) row.getCell(c).fill = NO_IMAGE_FILL;
   }
 }
 

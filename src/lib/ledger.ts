@@ -124,6 +124,8 @@ export interface EnrichedLedgerEntry {
   content: string; // 내용/적요
   receiptNo: number | null;
   payer: string | null;
+  /** 매칭된 영수증의 증빙 사진 존재 여부 (영수증 없는 행은 null) */
+  hasImage: boolean | null;
 }
 
 /**
@@ -202,6 +204,18 @@ export async function getEnrichedLedger(
   );
   const receiptById = new Map(receipts.map((r) => [r.id, r]));
 
+  // 증빙 사진 존재 여부 (사진 없는 매칭 영수증 표시용)
+  const imageReceiptIds = new Set<string>();
+  for (let i = 0; i < receiptIds.length; i += 100) {
+    const { data: imgRows } = await supabase
+      .from("receipt_image")
+      .select("receipt_id")
+      .in("receipt_id", receiptIds.slice(i, i + 100));
+    for (const row of (imgRows ?? []) as { receipt_id: string }[]) {
+      imageReceiptIds.add(row.receipt_id);
+    }
+  }
+
   // 거래번호: 같은 날짜·계좌 안에서 시간 오름차순 순번 (entries는 최신순이므로 역순으로 센다)
   const accountDigits = (label: string): string => {
     const m = label.match(/\((\d+)\)/);
@@ -224,6 +238,7 @@ export async function getEnrichedLedger(
     let content = "";
     let receiptNo: number | null = null;
     let payer: string | null = null;
+    let hasImage: boolean | null = null;
 
     if (e.kind === "wash") {
       category = "(비지출)";
@@ -242,6 +257,7 @@ export async function getEnrichedLedger(
         payer = userName.get(r.user_id) ?? null;
         content = r.merchant || r.description || "-";
         receiptNo = r.receipt_no;
+        hasImage = imageReceiptIds.has(r.id);
       }
     } else {
       category = "(영수증 미매칭)";
@@ -265,6 +281,7 @@ export async function getEnrichedLedger(
       content,
       receiptNo,
       payer,
+      hasImage,
     };
   });
 }
