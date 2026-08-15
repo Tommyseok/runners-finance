@@ -110,6 +110,8 @@ export interface EnrichedLedgerEntry {
   id: string;
   bankAccountId: string;
   accountLabel: string;
+  /** 추적용 거래번호 "MMDD-계좌-순번" (예: 0803-033-2). 은행 기록 불변이라 시점과 무관하게 동일. */
+  txnRef: string;
   txnDate: string;
   direction: "income" | "expense";
   deposit: number;
@@ -200,6 +202,23 @@ export async function getEnrichedLedger(
   );
   const receiptById = new Map(receipts.map((r) => [r.id, r]));
 
+  // 거래번호: 같은 날짜·계좌 안에서 시간 오름차순 순번 (entries는 최신순이므로 역순으로 센다)
+  const accountDigits = (label: string): string => {
+    const m = label.match(/\((\d+)\)/);
+    return m ? m[1] : label;
+  };
+  const refByEntryId = new Map<string, string>();
+  const dayCounters = new Map<string, number>();
+  for (let i = entries.length - 1; i >= 0; i -= 1) {
+    const e = entries[i];
+    const digits = accountDigits(accLabel.get(e.bank_account_id) ?? "-");
+    const dayKey = `${e.txn_date}|${digits}`;
+    const seq = (dayCounters.get(dayKey) ?? 0) + 1;
+    dayCounters.set(dayKey, seq);
+    const mmdd = e.txn_date.slice(5).replace("-", "");
+    refByEntryId.set(e.id, `${mmdd}-${digits}-${seq}`);
+  }
+
   return entries.map((e) => {
     let category = "";
     let content = "";
@@ -233,6 +252,7 @@ export async function getEnrichedLedger(
       id: e.id,
       bankAccountId: e.bank_account_id,
       accountLabel: accLabel.get(e.bank_account_id) ?? "-",
+      txnRef: refByEntryId.get(e.id) ?? "-",
       txnDate: e.txn_date,
       direction: e.direction,
       deposit: e.deposit,

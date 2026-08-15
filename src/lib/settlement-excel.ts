@@ -13,13 +13,15 @@ import type {
 
 const NOTE_FONT = { italic: true, color: { argb: "FF595959" } };
 
-/** 결산 워크북(입출금원장_전체 + 계정항목요약 + 고정 상세 시트) 생성. */
+/** 결산 워크북(안내 + 입출금원장_전체 + 계정항목요약 + 고정 상세 시트) 생성. */
 export function buildSettlementWorkbook(
   data: SettlementData,
   details: SettlementDetail[],
   periodLabel: string,
 ): ExcelJS.Workbook {
   const wb = new ExcelJS.Workbook();
+
+  addGuideSheet(wb, data.orgName, periodLabel);
 
   addLedgerSheet(wb, {
     sheetName: "입출금원장_전체",
@@ -36,6 +38,53 @@ export function buildSettlementWorkbook(
   }
 
   return wb;
+}
+
+/** 맨 앞 안내 시트 — 결산 자료를 처음 보는 사람을 위한 읽는 방법. */
+function addGuideSheet(wb: ExcelJS.Workbook, orgName: string, periodLabel: string): void {
+  const ws = wb.addWorksheet("안내");
+  ws.columns = [{ width: 4 }, { width: 110 }];
+
+  ws.mergeCells("A1:B1");
+  ws.getCell("A1").value = `${orgName} 결산 자료 안내 (${periodLabel})`;
+  ws.getCell("A1").font = { bold: true, size: 16 };
+
+  const lines: Array<[string, boolean]> = [
+    ["", false],
+    ["■ 문서 구성", true],
+    ["① 입출금원장_전체 — 통장 입출금 사실 그대로 (출금 1건 = 1행)", false],
+    ["② 계정항목요약 — 계정항목별 수입·지출 합계와 검증", false],
+    ["③ 항목별 상세 시트 — 여름수련회·겨울수련회·소그룹운영비 등 주요 지출 항목의 세부 내역", false],
+    ["", false],
+    ["■ 회계 처리 기준 (중요)", true],
+    ["· 원장 시트는 통장 기준입니다. 여러 영수증을 묶어 한 번에 송금한 출금은 원장에 1행으로 표시되고,", false],
+    ["  계정항목·영수증No는 대표 영수증 1건의 것만 보입니다.", false],
+    ["· 계정항목요약·상세 시트는 영수증 기준입니다. 묶음 출금은 구성 영수증별로 분리되어", false],
+    ["  각 영수증의 계정항목으로 집계됩니다. 따라서 상세 시트에는 한 출금이 여러 행으로 나뉘어 나올 수 있습니다.", false],
+    ["", false],
+    ["■ 추적 방법 — 거래번호", true],
+    ["· 모든 행의 '거래번호'는 통장 거래 고유번호입니다. 형식: 월일-계좌-당일순번 (예: 0803-033-2 = 8/3 교회통장 2번째 거래)", false],
+    ["· 상세 시트의 분리된 행에서 거래번호를 확인한 뒤 원장 시트에서 같은 거래번호를 찾으면", false],
+    ["  그 출금의 전체 금액과 함께 지급된 다른 항목들을 확인할 수 있습니다.", false],
+    ["· 같은 거래번호가 여러 행에 보이면 = 한 번의 송금을 영수증별로 나눠 표시한 것입니다.", false],
+    ["", false],
+    ["■ 영수증 번호", true],
+    ["· '167-여름수련회' = 영수증 고유번호-계정항목. 지출영수증증빙 PDF의 No와 동일한 번호이므로", false],
+    ["  원장·결산·PDF를 같은 번호로 교차 대조할 수 있습니다.", false],
+    ["", false],
+    ["■ 검증", true],
+    ["· 계정항목요약 하단의 검증 블록에서 '요약 합계 − (비지출)'과 원장 합계의 차이가 0이면 정합합니다.", false],
+    ["· (비지출) = 계좌 간 이체·오입금(환불) 등 실질 수입/지출이 아닌 거래", false],
+    ["· (영수증 미매칭) = 영수증 없이 통장에서 나간 지출 (수수료 등)", false],
+  ];
+  lines.forEach(([text, bold], i) => {
+    const cell = ws.getCell(`A${i + 2}`);
+    ws.mergeCells(`A${i + 2}:B${i + 2}`);
+    cell.value = text;
+    cell.font = bold
+      ? { bold: true, size: 11, color: { argb: "FF2F5496" } }
+      : { size: 10 };
+  });
 }
 
 function addSummarySheet(
@@ -197,5 +246,5 @@ function addDetailSheet(
   for (let c = 1; c <= 4; c += 1) miniTotal.getCell(c).font = { bold: true };
 
   ws.views = [{ state: "frozen", ySplit: 4 }];
-  ws.autoFilter = { from: { row: 4, column: 1 }, to: { row: 4, column: 11 } };
+  ws.autoFilter = { from: { row: 4, column: 1 }, to: { row: 4, column: 12 } };
 }

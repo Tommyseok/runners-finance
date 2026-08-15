@@ -3,7 +3,7 @@ import type { EnrichedLedgerEntry } from "@/lib/ledger";
 
 export const LEDGER_HEADERS = [
   "거래일", "계좌", "구분", "입금", "출금", "잔액",
-  "거래처", "계정항목", "내용·지출인", "영수증No", "대사상태",
+  "거래처", "계정항목", "내용·지출인", "영수증No", "대사상태", "거래번호",
 ] as const;
 
 export const HEADER_FILL: ExcelJS.Fill = {
@@ -60,6 +60,7 @@ export function drawLedgerHeaderRow(
   ws.columns = [
     { width: 12 }, { width: 12 }, { width: 7 }, { width: 12 }, { width: 12 },
     { width: 13 }, { width: 18 }, { width: 18 }, { width: 26 }, { width: 16 }, { width: 12 },
+    { width: 13 },
   ];
 }
 
@@ -87,12 +88,14 @@ export function drawLedgerEntryRow(
   row.getCell(9).value = content;
   row.getCell(10).value = formatReceiptRef(e.receiptNo, e.category);
   row.getCell(11).value = ledgerStatusLabel(e);
+  row.getCell(12).value = e.txnRef;
   for (const c of [4, 5, 6]) row.getCell(c).numFmt = "#,##0";
   row.getCell(3).alignment = { horizontal: "center" };
   row.getCell(10).alignment = { horizontal: "center" };
   row.getCell(11).alignment = { horizontal: "center" };
+  row.getCell(12).alignment = { horizontal: "center" };
   if (highlightUnmatched && e.matchStatus === "unmatched" && e.kind === "expense") {
-    for (let c = 1; c <= 11; c += 1) row.getCell(c).fill = UNMATCHED_FILL;
+    for (let c = 1; c <= 12; c += 1) row.getCell(c).fill = UNMATCHED_FILL;
   }
 }
 
@@ -147,7 +150,7 @@ export function addLedgerSheet(
   totalRow.getCell(5).font = { bold: true };
 
   ws.views = [{ state: "frozen", ySplit: 4 }];
-  ws.autoFilter = { from: { row: 4, column: 1 }, to: { row: 4, column: 11 } };
+  ws.autoFilter = { from: { row: 4, column: 1 }, to: { row: 4, column: 12 } };
 
   return { incomeTotal, expenseTotal };
 }
