@@ -244,6 +244,43 @@ function addDetailSheet(
   miniTotal.getCell(3).numFmt = "#,##0";
   miniTotal.getCell(4).numFmt = "0.0%";
   for (let c = 1; c <= 4; c += 1) miniTotal.getCell(c).font = { bold: true };
+  r += 1;
+
+  // 수입·지출 밸런스 (incomeCategories가 설정된 시트만)
+  if (detail.incomeCategories && detail.incomeTotal !== undefined) {
+    r += 1;
+    ws.getRow(r).getCell(1).value = "수입·지출 밸런스";
+    ws.getRow(r).getCell(1).font = { bold: true };
+    r += 1;
+    const balanceRows: Array<[string, number, boolean]> = [
+      [`수입 (${detail.incomeCategories.join("·")})`, detail.incomeTotal, false],
+      ["지출 합계", detail.expenseTotal, false],
+      ["수지 (수입 − 지출)", detail.incomeTotal - detail.expenseTotal, true],
+    ];
+    for (const [label, value, bold] of balanceRows) {
+      const row = ws.getRow(r);
+      row.getCell(1).value = label;
+      row.getCell(3).value = value;
+      row.getCell(3).numFmt = "#,##0";
+      if (bold) {
+        row.getCell(1).font = { bold: true };
+        row.getCell(3).font = { bold: true };
+        row.getCell(3).fill = {
+          type: "pattern",
+          pattern: "solid",
+          fgColor: { argb: "FFDEEAF6" },
+        };
+      }
+      r += 1;
+    }
+    ws.getRow(r).getCell(1).value =
+      "* 수입은 선택한 기간 내 해당 계정 합계. 후원금 등 헌금으로 들어온 수입은 '헌금' 계정이라 미포함.";
+    ws.getRow(r).getCell(1).font = NOTE_FONT;
+    r += 1;
+    ws.getRow(r).getCell(1).value =
+      "* 수련회비 계정은 여름·겨울 공용 — 특정 수련회만 보려면 기간을 그 수련회 기간으로 지정해 출력.";
+    ws.getRow(r).getCell(1).font = NOTE_FONT;
+  }
 
   ws.views = [{ state: "frozen", ySplit: 4 }];
   ws.autoFilter = { from: { row: 4, column: 1 }, to: { row: 4, column: 12 } };

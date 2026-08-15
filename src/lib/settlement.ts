@@ -11,8 +11,17 @@ import {
  * 새 계정항목이 생겨도 시트는 늘지 않는다 — 요약 시트에는 모두 포함됨.
  */
 export const SETTLEMENT_DETAIL_SHEETS = [
-  { sheetName: "여름수련회", categories: ["[훈련비] 여름수련회"] },
-  { sheetName: "겨울수련회", categories: ["[훈련비] 겨울수련회"] },
+  {
+    sheetName: "여름수련회",
+    categories: ["[훈련비] 여름수련회"],
+    // 시트 하단 수입·지출 밸런스에 포함할 수입 계정 (기간 내 합계)
+    incomeCategories: ["수련회비"],
+  },
+  {
+    sheetName: "겨울수련회",
+    categories: ["[훈련비] 겨울수련회"],
+    incomeCategories: ["수련회비"],
+  },
   { sheetName: "소그룹운영비", categories: ["[운영비] 소그룹"] },
   { sheetName: "찬양팀지원비", categories: ["[운영비] 찬양팀"] },
   { sheetName: "심방비", categories: ["[운영비] 심방비"] },
@@ -65,6 +74,9 @@ export interface SettlementDetail {
   count: number;
   expenseTotal: number;
   byAccount: DetailAccountRow[];
+  /** incomeCategories가 설정된 시트만: 기간 내 해당 수입 계정 합계 */
+  incomeCategories?: readonly string[];
+  incomeTotal?: number;
 }
 
 export interface SettlementData {
@@ -362,6 +374,19 @@ export function buildSettlementDetails(
         share: expenseTotal > 0 ? v.amount / expenseTotal : 0,
       }))
       .sort((a, b) => b.amount - a.amount);
+    const incomeCategories =
+      "incomeCategories" in def ? (def.incomeCategories as readonly string[]) : undefined;
+    const incomeTotal = incomeCategories
+      ? entries
+          .filter(
+            (e) =>
+              e.direction === "income" &&
+              e.kind !== "wash" &&
+              e.kind !== "transfer" &&
+              incomeCategories.includes(e.category),
+          )
+          .reduce((s, e) => s + e.deposit, 0)
+      : undefined;
     return {
       sheetName: def.sheetName,
       categories: def.categories,
@@ -369,6 +394,8 @@ export function buildSettlementDetails(
       count: detailEntries.length,
       expenseTotal,
       byAccount,
+      incomeCategories,
+      incomeTotal,
     };
   });
 }

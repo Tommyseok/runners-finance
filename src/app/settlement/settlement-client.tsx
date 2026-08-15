@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import { useRouter } from "next/navigation";
-import { FileDown, Loader2 } from "lucide-react";
+import { FileArchive, FileDown, Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -67,6 +67,7 @@ export function SettlementClient({
   const [customTo, setCustomTo] = useState(to ?? "");
   const [customOpen, setCustomOpen] = useState(presetId === "custom");
   const [busy, setBusy] = useState(false);
+  const [zipBusy, setZipBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   function applyPreset(p: Preset) {
@@ -115,6 +116,36 @@ export function SettlementClient({
       setError("네트워크 오류가 발생했습니다.");
     } finally {
       setBusy(false);
+    }
+  }
+
+  async function downloadPdfZip() {
+    setError(null);
+    setZipBusy(true);
+    try {
+      const res = await fetch("/api/download/settlement-pdfs", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ from, to, periodLabel }),
+      });
+      if (!res.ok) {
+        const j = await res.json().catch(() => ({}));
+        setError(j.error ?? "증빙 PDF 생성에 실패했습니다.");
+        return;
+      }
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `지출증빙일괄-${periodLabel}.zip`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
+    } catch {
+      setError("네트워크 오류가 발생했습니다.");
+    } finally {
+      setZipBusy(false);
     }
   }
 
@@ -173,13 +204,27 @@ export function SettlementClient({
         {error && <p className="text-sm text-destructive">{error}</p>}
 
         {isAdmin && (
-          <Button onClick={download} disabled={busy} className="w-full">
-            {busy ? (
-              <><Loader2 className="h-4 w-4 animate-spin" /> 결산 엑셀 생성 중…</>
-            ) : (
-              <><FileDown className="h-4 w-4" /> 결산 엑셀 다운로드 ({periodLabel})</>
-            )}
-          </Button>
+          <div className="space-y-2">
+            <Button onClick={download} disabled={busy || zipBusy} className="w-full">
+              {busy ? (
+                <><Loader2 className="h-4 w-4 animate-spin" /> 결산 엑셀 생성 중…</>
+              ) : (
+                <><FileDown className="h-4 w-4" /> 결산 엑셀 다운로드 ({periodLabel})</>
+              )}
+            </Button>
+            <Button
+              onClick={downloadPdfZip}
+              disabled={busy || zipBusy}
+              variant="secondary"
+              className="w-full"
+            >
+              {zipBusy ? (
+                <><Loader2 className="h-4 w-4 animate-spin" /> 항목별 PDF 생성 중… (1~2분)</>
+              ) : (
+                <><FileArchive className="h-4 w-4" /> 증빙 PDF 일괄 다운로드 (ZIP)</>
+              )}
+            </Button>
+          </div>
         )}
       </CardContent>
     </Card>
