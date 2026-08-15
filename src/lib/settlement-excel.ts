@@ -246,14 +246,17 @@ function addDetailSheet(
   for (let c = 1; c <= 4; c += 1) miniTotal.getCell(c).font = { bold: true };
   r += 1;
 
-  // 수입·지출 밸런스 (incomeCategories가 설정된 시트만)
-  if (detail.incomeCategories && detail.incomeTotal !== undefined) {
+  // 수입·지출 밸런스 (incomeLines가 설정된 시트만)
+  if (detail.incomeLines && detail.incomeTotal !== undefined) {
     r += 1;
     ws.getRow(r).getCell(1).value = "수입·지출 밸런스";
     ws.getRow(r).getCell(1).font = { bold: true };
     r += 1;
     const balanceRows: Array<[string, number, boolean]> = [
-      [`수입 (${detail.incomeCategories.join("·")})`, detail.incomeTotal, false],
+      ...detail.incomeLines.map(
+        (l): [string, number, boolean] => [l.label, l.amount, false],
+      ),
+      ["수입 합계", detail.incomeTotal, true],
       ["지출 합계", detail.expenseTotal, false],
       ["수지 (수입 − 지출)", detail.incomeTotal - detail.expenseTotal, true],
     ];
@@ -274,11 +277,11 @@ function addDetailSheet(
       r += 1;
     }
     ws.getRow(r).getCell(1).value =
-      "* 수입은 선택한 기간 내 해당 계정 합계. 후원금 등 헌금으로 들어온 수입은 '헌금' 계정이라 미포함.";
+      "* 후원금 = '헌금' 계정 중 적요에 '주일'이 없는 입금 (정기 주일헌금 제외 — 추정 기준).";
     ws.getRow(r).getCell(1).font = NOTE_FONT;
     r += 1;
     ws.getRow(r).getCell(1).value =
-      "* 수련회비 계정은 여름·겨울 공용 — 특정 수련회만 보려면 기간을 그 수련회 기간으로 지정해 출력.";
+      "* 수입은 선택한 기간 내 합계. 수련회비·후원금은 여름·겨울 공용이므로 특정 수련회만 보려면 기간을 그 수련회 기간으로 지정해 출력.";
     ws.getRow(r).getCell(1).font = NOTE_FONT;
   }
 

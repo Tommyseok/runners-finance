@@ -74,8 +74,9 @@ export interface SettlementDetail {
   count: number;
   expenseTotal: number;
   byAccount: DetailAccountRow[];
-  /** incomeCategories가 설정된 시트만: 기간 내 해당 수입 계정 합계 */
+  /** incomeCategories가 설정된 시트만: 기간 내 수입 구성 (수련회비 / 후원금 분리) */
   incomeCategories?: readonly string[];
+  incomeLines?: Array<{ label: string; amount: number; note?: string }>;
   incomeTotal?: number;
 }
 
@@ -376,17 +377,25 @@ export function buildSettlementDetails(
       .sort((a, b) => b.amount - a.amount);
     const incomeCategories =
       "incomeCategories" in def ? (def.incomeCategories as readonly string[]) : undefined;
-    const incomeTotal = incomeCategories
-      ? entries
-          .filter(
-            (e) =>
-              e.direction === "income" &&
-              e.kind !== "wash" &&
-              e.kind !== "transfer" &&
-              incomeCategories.includes(e.category),
-          )
-          .reduce((s, e) => s + e.deposit, 0)
-      : undefined;
+    let incomeLines: SettlementDetail["incomeLines"];
+    let incomeTotal: number | undefined;
+    if (incomeCategories) {
+      const realIncome = entries.filter(
+        (e) => e.direction === "income" && e.kind !== "wash" && e.kind !== "transfer",
+      );
+      const feeTotal = realIncome
+        .filter((e) => e.category === "수련회비")
+        .reduce((s, e) => s + e.deposit, 0);
+      // 후원금 = '헌금' 계정 중 적요에 '주일'이 없는 입금 (정기 주일헌금 제외 — 추정 기준)
+      const donationTotal = realIncome
+        .filter((e) => e.category === "헌금" && !(e.content ?? "").includes("주일"))
+        .reduce((s, e) => s + e.deposit, 0);
+      incomeLines = [
+        { label: "수입 · 수련회비", amount: feeTotal },
+        { label: "수입 · 후원금 (주일헌금 외 헌금)", amount: donationTotal },
+      ];
+      incomeTotal = feeTotal + donationTotal;
+    }
     return {
       sheetName: def.sheetName,
       categories: def.categories,
@@ -395,6 +404,7 @@ export function buildSettlementDetails(
       expenseTotal,
       byAccount,
       incomeCategories,
+      incomeLines,
       incomeTotal,
     };
   });
