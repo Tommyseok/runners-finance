@@ -123,9 +123,56 @@ export interface EnrichedLedgerEntry {
   category: string; // 계정항목
   content: string; // 내용/적요
   receiptNo: number | null;
+  /** 증빙번호 — 세부계정별 순번 표기 (예: "소그룹-3"). 지출일 오름차순 기준. */
+  receiptRef: string | null;
   payer: string | null;
   /** 매칭된 영수증의 증빙 사진 존재 여부 (영수증 없는 행은 null) */
   hasImage: boolean | null;
+}
+
+/**
+ * 증빙번호 맵 (영수증 id → "계정-순번").
+ * 계정항목별로 지출일(같으면 내부번호) 오름차순으로 1부터 부여 — 문서 표기용.
+ */
+export async function buildReceiptRefMap(
+  supabase: SupabaseClient,
+  orgId: string,
+): Promise<Map<string, string>> {
+  const [{ data: receipts }, { data: cats }] = await Promise.all([
+    supabase
+      .from("receipt")
+      .select("id, receipt_no, category_id, expense_date")
+      .eq("org_id", orgId),
+    supabase.from("budget_category").select("id, name").eq("org_id", orgId),
+  ]);
+  const catName = new Map(
+    ((cats ?? []) as { id: string; name: string }[]).map((c) => [c.id, c.name]),
+  );
+  const shortName = (categoryId: string | null): string => {
+    const full = categoryId ? (catName.get(categoryId) ?? "미지정") : "미지정";
+    return full.replace(/^\[[^\]]*\]\s*/, "") || full;
+  };
+  const rows = ((receipts ?? []) as {
+    id: string;
+    receipt_no: number | null;
+    category_id: string | null;
+    expense_date: string | null;
+  }[]).map((r) => ({ ...r, group: shortName(r.category_id) }));
+  rows.sort((a, b) => {
+    if (a.group !== b.group) return a.group < b.group ? -1 : 1;
+    const da = a.expense_date ?? "9999";
+    const db = b.expense_date ?? "9999";
+    if (da !== db) return da < db ? -1 : 1;
+    return (a.receipt_no ?? 0) - (b.receipt_no ?? 0);
+  });
+  const map = new Map<string, string>();
+  const counters = new Map<string, number>();
+  for (const r of rows) {
+    const seq = (counters.get(r.group) ?? 0) + 1;
+    counters.set(r.group, seq);
+    map.set(r.id, `${r.group}-${seq}`);
+  }
+  return map;
 }
 
 /**
@@ -138,7 +185,10 @@ export async function getEnrichedLedger(
   month: string,
   range?: LedgerRange,
 ): Promise<EnrichedLedgerEntry[]> {
-  const { entries } = await getLedgerEntries(supabase, orgId, month, range);
+  const [{ entries }, refMap] = await Promise.all([
+    getLedgerEntries(supabase, orgId, month, range),
+    buildReceiptRefMap(supabase, orgId),
+  ]);
 
   const receiptIds = Array.from(
     new Set(entries.map((e) => e.matched_receipt_id).filter(Boolean) as string[]),
@@ -237,6 +287,7 @@ export async function getEnrichedLedger(
     let category = "";
     let content = "";
     let receiptNo: number | null = null;
+    let receiptRef: string | null = null;
     let payer: string | null = null;
     let hasImage: boolean | null = null;
 
@@ -257,6 +308,7 @@ export async function getEnrichedLedger(
         payer = userName.get(r.user_id) ?? null;
         content = r.merchant || r.description || "-";
         receiptNo = r.receipt_no;
+        receiptRef = refMap.get(r.id) ?? null;
         hasImage = imageReceiptIds.has(r.id);
       }
     } else {
@@ -280,6 +332,7 @@ export async function getEnrichedLedger(
       category,
       content,
       receiptNo,
+      receiptRef,
       payer,
       hasImage,
     };

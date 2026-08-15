@@ -1,5 +1,6 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import {
+  buildReceiptRefMap,
   getBankBalances,
   getEnrichedLedger,
   type EnrichedLedgerEntry,
@@ -7,30 +8,21 @@ import {
 } from "@/lib/ledger";
 
 /**
- * 결산 상세 시트 고정 목록 (사용자 결산 템플릿과 동일).
- * 새 계정항목이 생겨도 시트는 늘지 않는다 — 요약 시트에는 모두 포함됨.
+ * 결산 상세 시트는 지출이 있는 모든 계정항목마다 자동 생성된다 —
+ * 새 계정이 추가되면 시트·PDF도 자동으로 늘어나 증빙 누락이 없다.
+ * "(영수증 미매칭)" 등 구조 항목은 증빙없음 시트가 담당하므로 제외.
  */
-export const SETTLEMENT_DETAIL_SHEETS = [
-  {
-    sheetName: "여름수련회",
-    categories: ["[훈련비] 여름수련회"],
-    // 시트 하단 수입·지출 밸런스: 해당 시즌의 수련회비·후원금만 집계
-    season: "summer",
-  },
-  {
-    sheetName: "겨울수련회",
-    categories: ["[훈련비] 겨울수련회"],
-    season: "winter",
-  },
-  { sheetName: "소그룹운영비", categories: ["[운영비] 소그룹"] },
-  { sheetName: "찬양팀지원비", categories: ["[운영비] 찬양팀"] },
-  { sheetName: "심방비", categories: ["[운영비] 심방비"] },
-  { sheetName: "교사지원", categories: ["[지원비] 교사지원"] },
-  {
-    sheetName: "전체행사비",
-    categories: ["[행사비] 학년모임", "[행사비] 고등부행사 (체육대회 등)"],
-  },
-] as const;
+export function expenseCategoryOrder(summary: SettlementCategoryRow[]): string[] {
+  return summary
+    .filter((r) => r.expenseTotal > 0 && !r.category.startsWith("("))
+    .map((r) => r.category);
+}
+
+/** "[운영비] 소그룹" → "소그룹" — 엑셀 시트명·PDF 파일명에 쓸 수 있게 금지문자까지 정리 */
+export function categorySheetName(category: string): string {
+  const short = category.replace(/^\[[^\]]*\]\s*/, "").replace(/[\\/?*[\]:]/g, " ").trim();
+  return (short || category).slice(0, 31);
+}
 
 export type AccountGroup = "self" | "church" | "other";
 
@@ -169,6 +161,7 @@ async function splitByTxnLinks(
   }
   if (linksByTxn.size === 0) return entries;
 
+  const refMap = await buildReceiptRefMap(supabase, orgId);
   const receiptIds = Array.from(
     new Set(Array.from(linksByTxn.values()).flat().map((l) => l.receipt_id)),
   );
@@ -231,6 +224,7 @@ async function splitByTxnLinks(
         category: r?.category_id ? (catNameById.get(r.category_id) ?? e.category) : e.category,
         content: r?.merchant ?? e.content,
         receiptNo: r?.receipt_no ?? null,
+        receiptRef: refMap.get(l.receipt_id) ?? null,
         payer: r ? (userNameById.get(r.user_id) ?? null) : e.payer,
         hasImage: r ? imageReceiptIds.has(r.id) : e.hasImage,
       });
@@ -426,11 +420,24 @@ export function buildIncomeDetail(entries: EnrichedLedgerEntry[]): IncomeDetail 
   return { entries: labeled, groups, total };
 }
 
-/** 고정 상세 시트 데이터 — 지출 엔트리 필터(최신순 유지) + 계좌별 구분. */
+/**
+ * 상세 시트 데이터 — 지출이 있는 모든 계정항목마다 자동 생성.
+ * categories 순서는 계정항목요약(sort_order)과 동일하게 전달받는다.
+ */
 export function buildSettlementDetails(
   entries: EnrichedLedgerEntry[],
+  categories: string[],
 ): SettlementDetail[] {
-  return SETTLEMENT_DETAIL_SHEETS.map((def) => {
+  return categories.map((category) => {
+    const def = {
+      sheetName: categorySheetName(category),
+      categories: [category] as readonly string[],
+      season: category.includes("여름수련회")
+        ? ("summer" as const)
+        : category.includes("겨울수련회")
+          ? ("winter" as const)
+          : undefined,
+    };
     const detailEntries = entries.filter(
       (e) => e.direction === "expense" && (def.categories as readonly string[]).includes(e.category),
     );

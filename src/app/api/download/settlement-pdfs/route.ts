@@ -7,6 +7,7 @@ import {
   safeFileSeg,
 } from "@/lib/download-helpers";
 import { buildSettlementPdfZip } from "@/lib/settlement-pdfs";
+import { buildReceiptRefMap } from "@/lib/ledger";
 
 export const runtime = "nodejs";
 export const maxDuration = 300;
@@ -43,6 +44,7 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: "해당 기간에 영수증이 없습니다." }, { status: 404 });
   }
 
+  const refByReceiptId = await buildReceiptRefMap(admin, orgId);
   const { buffer, fileCount } = await buildSettlementPdfZip({
     receipts,
     userMap,
@@ -51,6 +53,7 @@ export async function POST(req: Request) {
     imagesByReceipt,
     downloadImage: (p) => downloadImageBuffer(admin, p),
     periodLabel,
+    refByReceiptId,
   });
   if (fileCount === 0) {
     return NextResponse.json({ error: "생성할 PDF가 없습니다." }, { status: 404 });

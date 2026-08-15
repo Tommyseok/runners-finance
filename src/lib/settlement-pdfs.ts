@@ -1,7 +1,7 @@
 import JSZip from "jszip";
 import type { Receipt, ReceiptImage } from "@/lib/db-types";
 import { renderExpenseReportPdf } from "@/lib/expense-report-pdf";
-import { SETTLEMENT_DETAIL_SHEETS } from "@/lib/settlement";
+import { categorySheetName } from "@/lib/settlement";
 
 export interface SettlementPdfZipInput {
   receipts: Receipt[];
@@ -11,47 +11,53 @@ export interface SettlementPdfZipInput {
   imagesByReceipt: Map<string, ReceiptImage[]>;
   downloadImage: (storagePath: string) => Promise<Buffer>;
   periodLabel: string;
+  refByReceiptId?: Map<string, string>;
 }
 
-const ETC_SHEET = "기타항목";
-
 /**
- * 결산 상세 시트 구성과 동일하게 계정항목별 지출증빙 PDF를 만들어 ZIP으로 묶는다.
- * 고정 시트에 없는 계정(제자훈련·소모품 등)은 "기타항목" PDF로 모아 누락을 방지.
+ * 지출이 있는 모든 계정항목마다 지출증빙 PDF를 만들어 ZIP으로 묶는다.
+ * 새 계정이 추가되면 PDF도 자동으로 늘어난다 — 증빙 누락 방지.
  */
 export async function buildSettlementPdfZip(
   input: SettlementPdfZipInput,
 ): Promise<{ buffer: Buffer; fileCount: number }> {
-  const { receipts, userMap, catMap, orgName, imagesByReceipt, downloadImage, periodLabel } =
-    input;
+  const {
+    receipts, userMap, catMap, orgName, imagesByReceipt, downloadImage, periodLabel,
+    refByReceiptId,
+  } = input;
 
   const nameOf = (r: Receipt): string =>
     r.category_id ? (catMap.get(r.category_id) ?? "(미지정)") : "(미지정)";
 
-  const covered = new Set<string>();
-  const groups: Array<{ sheetName: string; receipts: Receipt[] }> = [];
-  for (const def of SETTLEMENT_DETAIL_SHEETS) {
-    const members = receipts.filter((r) =>
-      (def.categories as readonly string[]).includes(nameOf(r)),
-    );
-    for (const r of members) covered.add(r.id);
-    groups.push({ sheetName: def.sheetName, receipts: members });
+  // 계정항목별 그룹 (금액 큰 순) — 계정 없는 영수증은 "미지정"으로 수집해 누락 방지
+  const groupMap = new Map<string, Receipt[]>();
+  for (const r of receipts) {
+    const key = nameOf(r);
+    const arr = groupMap.get(key) ?? [];
+    arr.push(r);
+    groupMap.set(key, arr);
   }
-  const etc = receipts.filter((r) => !covered.has(r.id));
-  groups.push({ sheetName: ETC_SHEET, receipts: etc });
+  const groups = Array.from(groupMap.entries())
+    .map(([category, members]) => ({
+      sheetName: category === "(미지정)" ? "미지정" : categorySheetName(category),
+      members,
+      total: members.reduce((s, r) => s + (r.total_amount ?? 0), 0),
+    }))
+    .sort((a, b) => b.total - a.total);
 
   const zip = new JSZip();
   let fileCount = 0;
   for (const g of groups) {
-    if (g.receipts.length === 0) continue;
+    if (g.members.length === 0) continue;
     const buffer = await renderExpenseReportPdf({
-      receipts: g.receipts,
+      receipts: g.members,
       userMap,
       catMap,
       orgName,
       imagesByReceipt,
       downloadImage,
       periodLabel: `${g.sheetName} · ${periodLabel}`,
+      refByReceiptId,
     });
     zip.file(`지출증빙-${g.sheetName}-${periodLabel}.pdf`, buffer);
     fileCount += 1;

@@ -5,7 +5,11 @@ import {
   getAdminContextOrNull,
   safeFileSeg,
 } from "@/lib/download-helpers";
-import { buildSettlementDetails, getSettlementData } from "@/lib/settlement";
+import {
+  buildSettlementDetails,
+  expenseCategoryOrder,
+  getSettlementData,
+} from "@/lib/settlement";
 import { buildSettlementWorkbook } from "@/lib/settlement-excel";
 import type { LedgerRange } from "@/lib/ledger";
 
@@ -43,7 +47,7 @@ export async function POST(req: Request) {
 
   const admin = createAdminClient();
   const data = await getSettlementData(admin, orgId, month, range);
-  const details = buildSettlementDetails(data.splitEntries);
+  const details = buildSettlementDetails(data.splitEntries, expenseCategoryOrder(data.summary));
   const wb = buildSettlementWorkbook(data, details, periodLabel);
 
   const buffer = Buffer.from(await wb.xlsx.writeBuffer());

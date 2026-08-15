@@ -8,6 +8,7 @@ import {
   type DownloadFilters,
 } from "@/lib/download-helpers";
 import { renderExpenseReportPdf } from "@/lib/expense-report-pdf";
+import { buildReceiptRefMap } from "@/lib/ledger";
 
 export const runtime = "nodejs";
 export const maxDuration = 300;
@@ -40,6 +41,7 @@ export async function POST(req: Request) {
   }
 
   try {
+    const refByReceiptId = await buildReceiptRefMap(admin, ctx.profile.org_id);
     const buffer = await renderExpenseReportPdf({
       receipts,
       userMap,
@@ -48,6 +50,7 @@ export async function POST(req: Request) {
       imagesByReceipt,
       downloadImage: (p) => downloadImageBuffer(admin, p),
       periodLabel: body.periodLabel?.trim() || "전체기간",
+      refByReceiptId,
     });
     const filename = `지출영수증증빙-${safeFileSeg(orgName) || "org"}-${safeFileSeg(body.periodLabel ?? "전체")}.pdf`;
     return new NextResponse(new Uint8Array(buffer), {

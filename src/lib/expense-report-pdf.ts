@@ -14,6 +14,8 @@ export interface ExpenseReportData {
   /** storage_path → 원본 이미지 버퍼 */
   downloadImage: (storagePath: string) => Promise<Buffer>;
   periodLabel: string;
+  /** 증빙번호 (영수증 id → "계정-순번"). 없으면 내부번호-계정 표기로 폴백. */
+  refByReceiptId?: Map<string, string>;
 }
 
 // 가로 A4(842pt) - 좌우 margin 30 = 가용폭 782pt.
@@ -39,7 +41,10 @@ const TABLE_W = USABLE_W;
 const ROW_H = 200; // 영수증을 크게
 
 export async function renderExpenseReportPdf(data: ExpenseReportData): Promise<Buffer> {
-  const { receipts, userMap, catMap, orgName, imagesByReceipt, downloadImage, periodLabel } = data;
+  const {
+    receipts, userMap, catMap, orgName, imagesByReceipt, downloadImage, periodLabel,
+    refByReceiptId,
+  } = data;
   const fonts = await loadPdfFonts();
 
   const pdf = new PDFDocument({
@@ -62,10 +67,15 @@ export async function renderExpenseReportPdf(data: ExpenseReportData): Promise<B
   const total = receipts.reduce((s, r) => s + (r.total_amount ?? 0), 0);
   const startX = MARGIN;
   const tableRight = startX + TABLE_W;
-  // 영수증No 순으로 정렬 → PDF·원장·엑셀에서 같은 번호로 쉽게 대조
-  const sorted = [...receipts].sort(
-    (a, b) => (a.receipt_no ?? 1e9) - (b.receipt_no ?? 1e9),
-  );
+  // 증빙번호(계정별 지출일 오름차순) 순으로 정렬 → 계정별 PDF에서 1번부터 순서대로
+  const sorted = [...receipts].sort((a, b) => {
+    if (refByReceiptId) {
+      const da = a.expense_date ?? "9999";
+      const db = b.expense_date ?? "9999";
+      if (da !== db) return da < db ? -1 : 1;
+    }
+    return (a.receipt_no ?? 1e9) - (b.receipt_no ?? 1e9);
+  });
 
   pdf.addPage();
   drawTitle(pdf, orgName, periodLabel, receipts.length, total);
@@ -84,11 +94,12 @@ export async function renderExpenseReportPdf(data: ExpenseReportData): Promise<B
     const shortCat = shortCategoryLabel(catName);
     const cells: Record<string, string> = {
       no:
-        r.receipt_no != null
+        refByReceiptId?.get(r.id) ??
+        (r.receipt_no != null
           ? shortCat && !shortCat.startsWith("(")
             ? `${r.receipt_no}-${shortCat}`
             : String(r.receipt_no)
-          : "-",
+          : "-"),
       user: userMap.get(r.user_id) ?? "-",
       edate: r.expense_date ?? "-",
       cdate: r.created_at ? r.created_at.slice(0, 10) : "-",

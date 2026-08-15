@@ -5,7 +5,11 @@ import { Badge } from "@/components/ui/badge";
 import { Card, CardContent } from "@/components/ui/card";
 import { requireMembership } from "@/lib/auth";
 import { formatCurrency, formatDate } from "@/lib/utils";
-import { buildSettlementDetails, getSettlementData } from "@/lib/settlement";
+import {
+  buildSettlementDetails,
+  expenseCategoryOrder,
+  getSettlementData,
+} from "@/lib/settlement";
 import { SettlementClient } from "./settlement-client";
 
 export const dynamic = "force-dynamic";
@@ -36,7 +40,7 @@ export default async function SettlementPage({
   const presetId = range ? (searchParams.preset ?? "custom") : "all";
 
   const data = await getSettlementData(supabase, orgId, "all", range);
-  const details = buildSettlementDetails(data.splitEntries);
+  const details = buildSettlementDetails(data.splitEntries, expenseCategoryOrder(data.summary));
 
   // 활성 게시 (마이그레이션 전이면 테이블이 없을 수 있으므로 오류는 무시)
   let publication: { periodLabel: string; publishedAt: string } | null = null;
@@ -250,9 +254,9 @@ export default async function SettlementPage({
                                 </div>
                                 <div className="mt-0.5 flex flex-wrap items-center gap-1.5 text-xs text-muted-foreground">
                                   <span>{formatDate(e.txnDate)}</span>
-                                  {e.receiptNo != null && (
+                                  {e.receiptRef && (
                                     <Badge variant="secondary" className="text-[10px]">
-                                      영수증 #{e.receiptNo}
+                                      {e.receiptRef}
                                     </Badge>
                                   )}
                                 </div>

@@ -146,9 +146,9 @@ export default async function LedgerPage({
                         <div className="mt-0.5 flex flex-wrap items-center gap-1.5 text-xs text-muted-foreground">
                           <span>{formatDate(e.txnDate)}</span>
                           <span>· {e.category}</span>
-                          {e.receiptNo != null && (
+                          {e.receiptRef && (
                             <Badge variant="secondary" className="text-[10px]">
-                              영수증 #{e.receiptNo}
+                              {e.receiptRef}
                             </Badge>
                           )}
                           {e.kind === "wash" && (
