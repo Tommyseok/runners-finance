@@ -1,6 +1,7 @@
 import PDFDocument from "pdfkit";
 import sharp from "sharp";
 import type { Receipt, ReceiptImage } from "@/lib/db-types";
+import { shortCategoryLabel } from "@/lib/ledger-excel";
 import { loadPdfFonts } from "@/lib/pdf-fonts";
 import { formatCurrency } from "@/lib/utils";
 
@@ -20,7 +21,7 @@ export interface ExpenseReportData {
 const MARGIN = 30;
 const USABLE_W = 842 - MARGIN * 2; // 782
 const TEXT_COLS = [
-  { key: "no", label: "No", w: 26, align: "center" as const, fs: 8 },
+  { key: "no", label: "No", w: 64, align: "center" as const, fs: 7 },
   { key: "user", label: "지출인", w: 40, align: "center" as const, fs: 8 },
   { key: "edate", label: "지출일자", w: 46, align: "center" as const, fs: 7.5 },
   { key: "cdate", label: "청구일자", w: 46, align: "center" as const, fs: 7.5 },
@@ -80,8 +81,14 @@ export async function renderExpenseReportPdf(data: ExpenseReportData): Promise<B
     }
 
     const catName = r.category_id ? (catMap.get(r.category_id) ?? "(미지정)") : "(미지정)";
+    const shortCat = shortCategoryLabel(catName);
     const cells: Record<string, string> = {
-      no: r.receipt_no != null ? String(r.receipt_no) : "-",
+      no:
+        r.receipt_no != null
+          ? shortCat && !shortCat.startsWith("(")
+            ? `${r.receipt_no}-${shortCat}`
+            : String(r.receipt_no)
+          : "-",
       user: userMap.get(r.user_id) ?? "-",
       edate: r.expense_date ?? "-",
       cdate: r.created_at ? r.created_at.slice(0, 10) : "-",
@@ -119,10 +126,11 @@ export async function renderExpenseReportPdf(data: ExpenseReportData): Promise<B
       for (let k = 0; k < n; k += 1) {
         try {
           const raw = await downloadImage(imgs[k].storage_path);
+          // 배치 크기는 그대로 두고 임베드 해상도만 높인다 — PDF에서 확대해도 선명하도록.
           const buf = await sharp(raw)
             .rotate()
-            .resize({ width: 600, height: 900, fit: "inside", withoutEnlargement: true })
-            .jpeg({ quality: 78 })
+            .resize({ width: 1200, height: 1800, fit: "inside", withoutEnlargement: true })
+            .jpeg({ quality: 82 })
             .toBuffer();
           pdf.image(buf, imgX + 3 + k * cellW, y + 4, {
             fit: [cellW - 3, ROW_H - 8],

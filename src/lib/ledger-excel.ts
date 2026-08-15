@@ -18,6 +18,18 @@ export const UNMATCHED_FILL: ExcelJS.Fill = {
   fgColor: { argb: "FFFFF2CC" },
 };
 
+/** "[훈련비] 여름수련회" → "여름수련회" (표기용 짧은 카테고리명) */
+export function shortCategoryLabel(category: string): string {
+  return category.replace(/^\[[^\]]*\]\s*/, "");
+}
+
+/** 영수증 번호 표기: "167-여름수련회". 카테고리가 없거나 구조 항목("(비지출)" 등)이면 번호만. */
+export function formatReceiptRef(receiptNo: number | null, category: string): string {
+  if (receiptNo == null) return "";
+  const short = shortCategoryLabel(category);
+  return short && !short.startsWith("(") ? `${receiptNo}-${short}` : String(receiptNo);
+}
+
 export function ledgerStatusLabel(e: EnrichedLedgerEntry): string {
   return e.kind === "wash"
     ? "잘못입금"
@@ -47,7 +59,7 @@ export function drawLedgerHeaderRow(
   });
   ws.columns = [
     { width: 12 }, { width: 12 }, { width: 7 }, { width: 12 }, { width: 12 },
-    { width: 13 }, { width: 18 }, { width: 18 }, { width: 26 }, { width: 10 }, { width: 12 },
+    { width: 13 }, { width: 18 }, { width: 18 }, { width: 26 }, { width: 16 }, { width: 12 },
   ];
 }
 
@@ -73,7 +85,7 @@ export function drawLedgerEntryRow(
   row.getCell(7).value = e.counterparty ?? "";
   row.getCell(8).value = e.category;
   row.getCell(9).value = content;
-  row.getCell(10).value = e.receiptNo ?? "";
+  row.getCell(10).value = formatReceiptRef(e.receiptNo, e.category);
   row.getCell(11).value = ledgerStatusLabel(e);
   for (const c of [4, 5, 6]) row.getCell(c).numFmt = "#,##0";
   row.getCell(3).alignment = { horizontal: "center" };
