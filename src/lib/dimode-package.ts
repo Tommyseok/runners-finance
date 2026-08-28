@@ -4,8 +4,8 @@ import PDFDocument from "pdfkit";
 import sharp from "sharp";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import type { Receipt, ReceiptImage } from "@/lib/db-types";
-import { getEnrichedLedger } from "@/lib/ledger";
-import { classifyAccount } from "@/lib/settlement";
+import { getEnrichedLedger, type EnrichedLedgerEntry } from "@/lib/ledger";
+import { buildIncomeDetail, classifyAccount } from "@/lib/settlement";
 import { loadPdfFonts } from "@/lib/pdf-fonts";
 import {
   CATEGORY_TO_DIMODE,
@@ -74,10 +74,14 @@ export interface ReceiptBankInfo {
  * 영수증 id → 통장 출금 정보 맵. bank_txn_link(분해 매칭)로 각 영수증이
  * 어느 계좌의 어느 거래에서 지급됐는지 구한다.
  */
-export async function buildBankInfoByReceiptId(
+/** 패키지 생성에 필요한 통장 컨텍스트 — 원장 조회는 1회만 수행한다. */
+export async function loadDimodeBankContext(
   supabase: SupabaseClient,
   orgId: string,
-): Promise<Map<string, ReceiptBankInfo>> {
+): Promise<{
+  bankInfoByReceiptId: Map<string, ReceiptBankInfo>;
+  ledgerEntries: EnrichedLedgerEntry[];
+}> {
   const entriesPromise = getEnrichedLedger(supabase, orgId, "all");
 
   // PostgREST max-rows(1000) 잘림 방지 — settlement.ts와 동일하게 페이지 순회
@@ -125,7 +129,7 @@ export async function buildBankInfoByReceiptId(
       group: groups.has("church") ? "church" : groups.has("self") ? "self" : "other",
     });
   }
-  return map;
+  return { bankInfoByReceiptId: map, ledgerEntries: entries };
 }
 
 export interface DimodePackageInput {
@@ -136,6 +140,8 @@ export interface DimodePackageInput {
   downloadImage: (storagePath: string) => Promise<Buffer>;
   refByReceiptId: Map<string, string>;
   bankInfoByReceiptId: Map<string, ReceiptBankInfo>;
+  /** 원장 엔트리 (loadDimodeBankContext) — 자체수입 등록명세의 재원 입금 내역에 사용 */
+  ledgerEntries: EnrichedLedgerEntry[];
   orgName: string;
   periodLabel: string;
 }
@@ -666,6 +672,163 @@ function buildRootSummaryWorkbook(
   return wb;
 }
 
+/** 세목별 자체수입 재원 근거 분류 — 수련회는 해당 시즌 수련회비·후원금, 그 외는 일반 자체재원 */
+function jacheFundSources(itemCode: string): string[] | null {
+  if (itemCode === "506070103") return ["여름수련회비", "여름수련회 후원금"];
+  if (itemCode === "506070106") return ["겨울수련회비", "겨울수련회 후원금"];
+  return null;
+}
+
+/**
+ * 자체수입 등록명세 워크북 — 디모데 [자체수입] 메뉴 등록용.
+ * 자체수입은 영수증 증빙이 없으므로, 실제 통장 입금 내역(거래번호 포함)이 근거 자료가 된다.
+ */
+function buildJacheIncomeWorkbook(
+  results: ItemResult[],
+  input: DimodePackageInput,
+): ExcelJS.Workbook | null {
+  const jacheItems = results.filter((r) => r.jacheTotal > 0);
+  if (jacheItems.length === 0) return null;
+  const jacheSum = jacheItems.reduce((s, x) => s + x.jacheTotal, 0);
+  const income = buildIncomeDetail(input.ledgerEntries);
+  // 교회에서 받은 전도금·지원금은 자체수입 재원이 아니다
+  const selfIncome = income.entries.filter(
+    (e) => e.category !== "전도금" && e.category !== "지원금",
+  );
+  const selfTotal = selfIncome.reduce((s, e) => s + e.deposit, 0);
+  const sumByClass = new Map<string, number>();
+  for (const e of selfIncome) {
+    sumByClass.set(e.category, (sumByClass.get(e.category) ?? 0) + e.deposit);
+  }
+
+  const wb = new ExcelJS.Workbook();
+
+  // ---- 시트 1: 등록요약 ----
+  const ws = wb.addWorksheet("등록요약", { properties: { tabColor: { argb: "FF2F5496" } } });
+  ws.columns = [
+    { width: 12 },
+    { width: 20 },
+    { width: 14 },
+    { width: 44 },
+    { width: 30 },
+  ];
+  ws.mergeCells("A1:E1");
+  ws.getCell("A1").value =
+    `디모데 자체수입 등록명세 — ${DIMODE_TEAM.path} (${DIMODE_TEAM.code}), ${input.periodLabel}`;
+  ws.getCell("A1").font = { bold: true, size: 14 };
+  ws.mergeCells("A2:E2");
+  ws.getCell("A2").value =
+    "전도금 배정을 초과한 지출은 자체수입 재원으로 처리합니다. 아래 금액을 디모데 [자체수입] 메뉴에 세목별로 등록한 뒤, 2_자체수입 폴더의 팀지출 전표(자체수입 라디오)를 올립니다. 자체수입은 영수증 증빙이 없어 '재원 입금내역' 시트(통장 입금)가 근거 자료입니다.";
+  ws.getCell("A2").alignment = { wrapText: true, vertical: "top" };
+  ws.getCell("A2").font = { italic: true, color: { argb: "FF595959" } };
+  ws.getRow(2).height = 42;
+
+  const headers = ["세목코드", "세목", "등록 금액", "권장 적요", "재원 근거"];
+  const headerRow = ws.getRow(4);
+  headers.forEach((h, i) => {
+    const cell = headerRow.getCell(i + 1);
+    cell.value = h;
+    cell.font = { bold: true, color: { argb: "FFFFFFFF" } };
+    cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FF2F5496" } };
+    cell.alignment = { horizontal: "center", vertical: "middle" };
+  });
+  let r = 5;
+  for (const res of jacheItems) {
+    const item = res.group.item;
+    const sources = jacheFundSources(item.code);
+    const sourceNote = sources
+      ? `${sources.join("+")} (입금 합계 ${sources
+          .reduce((s, c) => s + (sumByClass.get(c) ?? 0), 0)
+          .toLocaleString("ko-KR")}원)`
+      : "일반 자체재원 (회비·헌금 등)";
+    const row = ws.getRow(r);
+    const vals: Array<string | number> = [
+      item.code,
+      item.name,
+      res.jacheTotal,
+      `${item.name} 자체부담분 (전도금 배정 ${item.fundAllocated.toLocaleString("ko-KR")}원 초과 지출)`,
+      sourceNote,
+    ];
+    vals.forEach((v, i) => {
+      const cell = row.getCell(i + 1);
+      cell.value = v;
+      if (i === 2) cell.numFmt = "#,##0";
+      if (i === 0) cell.alignment = { horizontal: "center" };
+    });
+    r += 1;
+  }
+  const totalRow = ws.getRow(r);
+  totalRow.getCell(2).value = "합계";
+  totalRow.getCell(3).value = jacheSum;
+  totalRow.getCell(3).numFmt = "#,##0";
+  totalRow.getCell(2).font = { bold: true };
+  totalRow.getCell(3).font = { bold: true };
+  r += 2;
+  ws.mergeCells(`A${r}:E${r}`);
+  ws.getCell(`A${r}`).value =
+    `※ 자체수입 재원(전도금·지원금 제외 실수입) 합계 ${selfTotal.toLocaleString("ko-KR")}원 ≥ 등록 필요액 ${jacheSum.toLocaleString("ko-KR")}원 — 상세는 '재원 입금내역' 시트`;
+  ws.getCell(`A${r}`).font = { italic: true, color: { argb: "FF595959" } };
+  ws.views = [{ state: "frozen", ySplit: 4 }];
+
+  // ---- 시트 2: 재원 입금내역 ----
+  const ws2 = wb.addWorksheet("재원 입금내역");
+  ws2.columns = [
+    { width: 13 },
+    { width: 11 },
+    { width: 16 },
+    { width: 20 },
+    { width: 16 },
+    { width: 12 },
+    { width: 13 },
+  ];
+  ws2.mergeCells("A1:G1");
+  ws2.getCell("A1").value =
+    `자체수입 재원 입금내역 (통장 기준, 전도금·지원금 제외) — ${input.orgName}`;
+  ws2.getCell("A1").font = { bold: true, size: 13 };
+  const h2 = ["거래번호", "입금일", "계좌", "입금자", "분류", "금액", "누계"];
+  const hr2 = ws2.getRow(3);
+  h2.forEach((h, i) => {
+    const cell = hr2.getCell(i + 1);
+    cell.value = h;
+    cell.font = { bold: true, color: { argb: "FFFFFFFF" } };
+    cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FF2F5496" } };
+    cell.alignment = { horizontal: "center", vertical: "middle" };
+  });
+  let r2 = 4;
+  let cumulative = 0;
+  const sortedIncome = [...selfIncome].sort((a, b) => (a.txnDate < b.txnDate ? -1 : 1));
+  for (const e of sortedIncome) {
+    cumulative += e.deposit;
+    const row = ws2.getRow(r2);
+    const vals: Array<string | number> = [
+      e.txnRef,
+      e.txnDate.slice(0, 10),
+      e.accountLabel,
+      e.counterparty ?? "",
+      e.category,
+      e.deposit,
+      cumulative,
+    ];
+    vals.forEach((v, i) => {
+      const cell = row.getCell(i + 1);
+      cell.value = v;
+      if (i === 5 || i === 6) cell.numFmt = "#,##0";
+      if (i === 0 || i === 1) cell.alignment = { horizontal: "center" };
+    });
+    r2 += 1;
+  }
+  const t2 = ws2.getRow(r2);
+  t2.getCell(5).value = "합계";
+  t2.getCell(6).value = selfTotal;
+  t2.getCell(6).numFmt = "#,##0";
+  t2.getCell(5).font = { bold: true };
+  t2.getCell(6).font = { bold: true };
+  ws2.views = [{ state: "frozen", ySplit: 3 }];
+  ws2.autoFilter = { from: { row: 3, column: 1 }, to: { row: 3, column: 7 } };
+
+  return wb;
+}
+
 /** 세목 폴더 이름: "506070215_심방비" (파일시스템 금지문자 제거) */
 function itemFolderName(item: DimodeItem): string {
   const safe = item.name.replace(/[\\/?*[\]:"<>|]/g, " ").replace(/\s+/g, " ").trim();
@@ -790,6 +953,13 @@ export async function buildDimodePackageZip(
   const rootWb = buildRootSummaryWorkbook(results, unmappedCategories, input);
   zip.file("00_제출요약.xlsx", Buffer.from(await rootWb.xlsx.writeBuffer()));
   fileCount += 1;
+
+  // 자체수입 등록명세 — 자체수입 처리가 필요한 세목이 있을 때만
+  const jacheWb = buildJacheIncomeWorkbook(results, input);
+  if (jacheWb) {
+    zip.file("00_자체수입_등록명세.xlsx", Buffer.from(await jacheWb.xlsx.writeBuffer()));
+    fileCount += 1;
+  }
 
   const buffer = await zip.generateAsync({
     type: "nodebuffer",

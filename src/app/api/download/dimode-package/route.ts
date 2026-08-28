@@ -6,7 +6,7 @@ import {
   loadReceiptsAndImages,
   safeFileSeg,
 } from "@/lib/download-helpers";
-import { buildBankInfoByReceiptId, buildDimodePackageZip } from "@/lib/dimode-package";
+import { buildDimodePackageZip, loadDimodeBankContext } from "@/lib/dimode-package";
 import { buildReceiptRefMap } from "@/lib/ledger";
 
 export const runtime = "nodejs";
@@ -44,9 +44,9 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: "해당 기간에 영수증이 없습니다." }, { status: 404 });
   }
 
-  const [refByReceiptId, bankInfoByReceiptId] = await Promise.all([
+  const [refByReceiptId, bankContext] = await Promise.all([
     buildReceiptRefMap(admin, orgId),
-    buildBankInfoByReceiptId(admin, orgId),
+    loadDimodeBankContext(admin, orgId),
   ]);
   const { buffer, itemCount } = await buildDimodePackageZip({
     receipts,
@@ -55,7 +55,8 @@ export async function POST(req: Request) {
     imagesByReceipt,
     downloadImage: (p) => downloadImageBuffer(admin, p),
     refByReceiptId,
-    bankInfoByReceiptId,
+    bankInfoByReceiptId: bankContext.bankInfoByReceiptId,
+    ledgerEntries: bankContext.ledgerEntries,
     orgName,
     periodLabel,
   });
