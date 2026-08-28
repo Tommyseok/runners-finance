@@ -27,6 +27,7 @@ const nextConfig = {
     outputFileTracingIncludes: {
       "/api/download/expense-report": ["./public/fonts/NanumGothic-*.ttf"],
       "/api/download/pdf": ["./public/fonts/NanumGothic-*.ttf"],
+      "/api/download/dimode-package": ["./public/fonts/NanumGothic-*.ttf"],
     },
   },
 };

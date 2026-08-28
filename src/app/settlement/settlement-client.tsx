@@ -70,6 +70,7 @@ export function SettlementClient({
   const [customOpen, setCustomOpen] = useState(presetId === "custom");
   const [busy, setBusy] = useState(false);
   const [zipBusy, setZipBusy] = useState(false);
+  const [dimodeBusy, setDimodeBusy] = useState(false);
   const [pubBusy, setPubBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -182,6 +183,36 @@ export function SettlementClient({
     }
   }
 
+  async function downloadDimodePackage() {
+    setError(null);
+    setDimodeBusy(true);
+    try {
+      const res = await fetch("/api/download/dimode-package", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ from, to, periodLabel }),
+      });
+      if (!res.ok) {
+        const j = await res.json().catch(() => ({}));
+        setError(j.error ?? "디모데 제출 패키지 생성에 실패했습니다.");
+        return;
+      }
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `디모데제출-${periodLabel}.zip`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
+    } catch {
+      setError("네트워크 오류가 발생했습니다.");
+    } finally {
+      setDimodeBusy(false);
+    }
+  }
+
   return (
     <Card>
       <CardContent className="space-y-3 p-4">
@@ -238,7 +269,7 @@ export function SettlementClient({
 
         {isAdmin && (
           <div className="space-y-2">
-            <Button onClick={download} disabled={busy || zipBusy} className="w-full">
+            <Button onClick={download} disabled={busy || zipBusy || dimodeBusy} className="w-full">
               {busy ? (
                 <><Loader2 className="h-4 w-4 animate-spin" /> 결산 엑셀 생성 중…</>
               ) : (
@@ -247,7 +278,7 @@ export function SettlementClient({
             </Button>
             <Button
               onClick={downloadPdfZip}
-              disabled={busy || zipBusy}
+              disabled={busy || zipBusy || dimodeBusy}
               variant="secondary"
               className="w-full"
             >
@@ -255,6 +286,18 @@ export function SettlementClient({
                 <><Loader2 className="h-4 w-4 animate-spin" /> 항목별 PDF 생성 중… (1~2분)</>
               ) : (
                 <><FileArchive className="h-4 w-4" /> 증빙 PDF 일괄 다운로드 (ZIP)</>
+              )}
+            </Button>
+            <Button
+              onClick={downloadDimodePackage}
+              disabled={busy || zipBusy || dimodeBusy}
+              variant="secondary"
+              className="w-full"
+            >
+              {dimodeBusy ? (
+                <><Loader2 className="h-4 w-4 animate-spin" /> 디모데 제출 패키지 생성 중… (1~2분)</>
+              ) : (
+                <><FileArchive className="h-4 w-4" /> 디모데 제출 패키지 (세목별 명세+증빙 ZIP)</>
               )}
             </Button>
             <Button
