@@ -67,3 +67,9 @@ scratch/
 downloaded-receipts/
 # Local dev/analysis tooling (hardcoded local paths, references gitignored data)
 scripts/
+
+# Local dev working docs (handoff notes)
+dev/
+
+# Local source materials (personal data, receipts ledger)
+누락_이전 영수증/

@@ -12,6 +12,11 @@ import {
   type SettlementData,
   type SettlementDetail,
 } from "@/lib/settlement";
+import {
+  buildDimodeRecon,
+  DIMODE_SNAPSHOT_DATE,
+  DIMODE_TEAM,
+} from "@/lib/dimode";
 
 const NOTE_FONT = { italic: true, color: { argb: "FF595959" } };
 
@@ -34,6 +39,8 @@ export function buildSettlementWorkbook(
   });
 
   addSummarySheet(wb, data, periodLabel);
+
+  addDimodeSheet(wb, data);
 
   addNoEvidenceSheet(wb, data.orgName, periodLabel, data.splitEntries);
 
@@ -101,6 +108,153 @@ function addNoEvidenceSheet(
 
   ws.views = [{ state: "frozen", ySplit: 4 }];
   ws.autoFilter = { from: { row: 4, column: 1 }, to: { row: 4, column: 12 } };
+}
+
+/**
+ * 디모데대사 시트 — 교회 공식 재정시스템(디모데 웹복식재정)의 세목 기준으로
+ * 예산 / 전도금 배정 / 앱 실지출(계좌별 병기) / 제출 전표를 나란히 대사한다.
+ * 디모데 측 수치는 스냅샷(src/lib/dimode.ts)이며 시트에 기준일을 명시한다.
+ */
+function addDimodeSheet(wb: ExcelJS.Workbook, data: SettlementData): void {
+  const { rows, unmapped } = buildDimodeRecon(data.summary);
+  const ws = wb.addWorksheet("디모데대사", {
+    properties: { tabColor: { argb: "FF2F5496" } },
+  });
+
+  ws.mergeCells("A1:L1");
+  ws.getCell("A1").value =
+    `디모데(교회 재정시스템) 세목 대사 — ${DIMODE_TEAM.path} (${DIMODE_TEAM.code}), 회계년도 ${DIMODE_TEAM.year}`;
+  ws.getCell("A1").font = { bold: true, size: 14 };
+  ws.mergeCells("A2:L2");
+  ws.getCell("A2").value =
+    `디모데 측 수치(예산·전도금 배정·제출 전표)는 ${DIMODE_SNAPSHOT_DATE} 조회 스냅샷 · 전도금 = 교회→고등부 이체(033 입금), 초과 지출분은 자체수입(수련회비 등) 부담`;
+  ws.getCell("A2").font = NOTE_FONT;
+
+  const headers = [
+    "세목코드",
+    "과목",
+    "세목",
+    "예산",
+    "전도금 배정",
+    "앱 실지출(계)",
+    "· 교회통장(033)",
+    "· 자체통장(017)",
+    "디모데 제출액",
+    "미소명 배정액",
+    "자체부담분",
+    "매핑된 앱 계정 / 비고",
+  ];
+  const headerRow = ws.getRow(4);
+  headers.forEach((h, i) => {
+    const cell = headerRow.getCell(i + 1);
+    cell.value = h;
+    cell.font = { bold: true, color: { argb: "FFFFFFFF" } };
+    cell.fill = HEADER_FILL;
+    cell.alignment = { horizontal: "center", vertical: "middle", wrapText: true };
+  });
+  ws.columns = [
+    { width: 11 },
+    { width: 11 },
+    { width: 18 },
+    { width: 12 },
+    { width: 12 },
+    { width: 13 },
+    { width: 13 },
+    { width: 13 },
+    { width: 13 },
+    { width: 12 },
+    { width: 12 },
+    { width: 46 },
+  ];
+
+  let r = 5;
+  for (const row of rows) {
+    const x = ws.getRow(r);
+    const noteParts = [row.mappedCategories.join(", ") || "(매핑된 계정 없음)"];
+    if (row.rejected > 0) {
+      noteParts.push(`반려 ${row.rejected.toLocaleString("ko-KR")}원 재제출 필요`);
+    }
+    if (row.submittedPending > 0) {
+      noteParts.push("제출분 결재중");
+    }
+    const vals: Array<string | number> = [
+      row.code,
+      row.subject,
+      row.name,
+      row.budget,
+      row.fundAllocated,
+      row.appExpense,
+      row.appExpenseChurch,
+      row.appExpenseSelf,
+      row.submitted,
+      row.allocRemaining,
+      row.selfBurden,
+      noteParts.join(" · "),
+    ];
+    vals.forEach((v, i) => {
+      const cell = x.getCell(i + 1);
+      cell.value = v;
+      if (i >= 3 && i <= 10) cell.numFmt = "#,##0";
+      if (i <= 2) cell.alignment = { horizontal: "center" };
+    });
+    if (row.rejected > 0) {
+      x.getCell(12).font = { color: { argb: "FFC00000" }, bold: true };
+    }
+    if (row.allocRemaining !== 0) {
+      x.getCell(10).font = { color: { argb: "FFC00000" }, bold: true };
+    }
+    r += 1;
+  }
+
+  const sum = (f: (row: (typeof rows)[number]) => number) =>
+    rows.reduce((s, row) => s + f(row), 0);
+  const totalRow = ws.getRow(r);
+  totalRow.getCell(3).value = "합계";
+  const totals = [
+    sum((x) => x.budget),
+    sum((x) => x.fundAllocated),
+    sum((x) => x.appExpense),
+    sum((x) => x.appExpenseChurch),
+    sum((x) => x.appExpenseSelf),
+    sum((x) => x.submitted),
+    sum((x) => x.allocRemaining),
+    sum((x) => x.selfBurden),
+  ];
+  totals.forEach((v, i) => {
+    const cell = totalRow.getCell(i + 4);
+    cell.value = v;
+    cell.numFmt = "#,##0";
+  });
+  for (let c = 3; c <= 11; c += 1) totalRow.getCell(c).font = { bold: true };
+  r += 2;
+
+  if (unmapped.length > 0) {
+    const warn = ws.getRow(r);
+    warn.getCell(1).value =
+      `⚠ 디모데 세목 미매핑 계정 ${unmapped.length}건 — src/lib/dimode.ts의 CATEGORY_TO_DIMODE에 추가 필요: ` +
+      unmapped
+        .map((u) => `${u.category} ${u.expenseTotal.toLocaleString("ko-KR")}원`)
+        .join(" / ");
+    warn.getCell(1).font = { color: { argb: "FFC00000" }, bold: true };
+    ws.mergeCells(`A${r}:L${r}`);
+    r += 2;
+  }
+
+  const notes = [
+    "· 전도금 배정 = 결재완료된 전도금신청으로 교회에서 받은 금액 (세목별 한도). 미소명 배정액 = 배정 − 제출(반려 제외).",
+    "· 앱 실지출은 이 결산의 계정항목요약과 동일 기준(영수증 분해 집계)이며, 교회통장/자체통장 열은 실제 출금 계좌 기준 병기입니다.",
+    "· 자체부담분 = 실지출이 전도금 배정을 초과한 금액 — 수련회비·후원금 등 자체수입으로 충당된 부분입니다.",
+    "· 디모데 팀지출 전표는 세목(예산항목) 단위로 결재되므로, 제출·재제출 시 이 시트의 세목 행 단위로 증빙을 준비합니다.",
+    "· 알려진 차이: 8/19 제출 전표(12번)는 제자훈련 도서비 781,900원을 심방비 세목(도서인쇄비)으로 제출 — 이 시트의 원칙 매핑(제자훈련→506070209)과 달라 심방비 제출액이 실지출보다 크고 제자훈련 제출액이 0으로 보입니다.",
+  ];
+  for (const n of notes) {
+    ws.mergeCells(`A${r}:L${r}`);
+    ws.getCell(`A${r}`).value = n;
+    ws.getCell(`A${r}`).font = NOTE_FONT;
+    r += 1;
+  }
+
+  ws.views = [{ state: "frozen", ySplit: 4 }];
 }
 
 /** 수입 시트 — 분류별 요약(주일헌금/여름·겨울수련회 후원금 분리) + 입금 상세. */
@@ -193,9 +347,10 @@ function addGuideSheet(wb: ExcelJS.Workbook, orgName: string, periodLabel: strin
     ["■ 문서 구성", true],
     ["① 입출금원장_전체 — 통장 입출금 사실 그대로 (출금 1건 = 1행)", false],
     ["② 계정항목요약 — 계정항목별 수입·지출 합계와 검증", false],
-    ["③ 증빙없음(붉은 탭) — 영수증 증빙이 없는 지출만 모은 시트", false],
-    ["④ 수입 — 분류별 수입 요약(주일헌금 / 여름·겨울수련회 후원금 / 수련회비 등)과 입금 상세", false],
-    ["⑤ 계정항목별 상세 시트 — 지출이 있는 모든 계정항목마다 자동 생성 (새 계정이 추가되면 시트·증빙 PDF도 자동 추가)", false],
+    ["③ 디모데대사(파란 탭) — 교회 공식 재정시스템(디모데) 세목 기준 대사: 예산 vs 전도금 배정 vs 실지출(계좌별) vs 제출 전표", false],
+    ["④ 증빙없음(붉은 탭) — 영수증 증빙이 없는 지출만 모은 시트", false],
+    ["⑤ 수입 — 분류별 수입 요약(주일헌금 / 여름·겨울수련회 후원금 / 수련회비 등)과 입금 상세", false],
+    ["⑥ 계정항목별 상세 시트 — 지출이 있는 모든 계정항목마다 자동 생성 (새 계정이 추가되면 시트·증빙 PDF도 자동 추가)", false],
     ["", false],
     ["■ 회계 처리 기준 (중요)", true],
     ["· 원장 시트는 통장 기준입니다. 여러 영수증을 묶어 한 번에 송금한 출금은 원장에 1행으로 표시되고,", false],
