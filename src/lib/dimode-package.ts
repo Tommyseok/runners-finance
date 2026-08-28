@@ -1,9 +1,8 @@
-import { mkdirSync, writeFileSync } from "node:fs";
-import os from "node:os";
-import path from "node:path";
 import ExcelJS from "exceljs";
 import JSZip from "jszip";
+import PDFDocument from "pdfkit";
 import sharp from "sharp";
+import { loadPdfFonts } from "@/lib/pdf-fonts";
 import type { Receipt, ReceiptImage } from "@/lib/db-types";
 import {
   CATEGORY_TO_DIMODE,
@@ -15,21 +14,19 @@ import {
 
 /**
  * 디모데(교회 공식 재정시스템) 제출 패키지 — 세목(예산항목)별 폴더에
- * 정산 명세 엑셀 1개 + 증빙 이미지(영수증당 1장 합성)를 담아 ZIP으로 묶는다.
+ * 정산 명세 엑셀 1개 + 증빙 PDF(1MB 이하로 자동 분할)를 담아 ZIP으로 묶는다.
  *
- * 디모데 팀지출 전표의 첨부 제약(슬롯 20개, 이미지 무제한·pdf/xlsx 1MB)에 맞춰:
- * - 명세 엑셀 1개 + 이미지 최대 19개 = 슬롯 20개 이내
- * - 영수증이 19건을 넘으면 여러 영수증을 한 이미지에 세로로 묶는다 (라벨 띠로 구분)
+ * 디모데 팀지출 전표의 첨부 제약(슬롯 20개, pdf/xlsx는 1MB 제한)에 맞춰:
+ * - 명세 엑셀 1개 + 증빙 PDF 최대 19개 = 슬롯 20개 이내
+ * - 각 PDF는 1MB를 넘지 않도록 영수증(페이지) 단위로 잘라 담는다
+ * - PDF 페이지마다 증빙번호·지출일·금액·거래처 헤더 → 한 문서로 넘겨보며 심사 가능
  */
 
-const MAX_IMAGE_FILES = 19;
-const IMG_WIDTH = 1200;
-const LABEL_HEIGHT = 56;
-const RECEIPT_GAP = 28;
-/** 개별 영수증 사진의 최대 세로 픽셀 (합성 높이 폭주 방지) */
-const MAX_SINGLE_IMG_H = 3000;
-/** 합성 jpg 1장의 최대 세로 픽셀 — JPEG 포맷 한계(65,535px)에 여유를 둔 값 */
-const MAX_COMPOSITE_H = 60000;
+const MAX_PROOF_FILES = 19;
+/** 디모데 비이미지 첨부 한도 1MB(1,048,576B) — 안전 마진을 둔 목표 상한 */
+const PDF_SIZE_LIMIT = 1_000_000;
+/** PDF 1개에 담을 압축 이미지 바이트 예산 (폰트 서브셋·구조 오버헤드 여유분 제외) */
+const PDF_IMG_BUDGET = 720_000;
 /** 증빙 이미지 다운로드 동시성 (람다 maxDuration 안에서 끝나도록) */
 const DOWNLOAD_CONCURRENCY = 4;
 
@@ -54,36 +51,6 @@ async function mapPool<T, R>(
 /** zip 파일명에 쓸 수 없는 문자 제거 (증빙번호가 계정명에서 오므로 방어) */
 function safeName(s: string): string {
   return s.replace(/[\\/:*?"<>|#]/g, "-").replace(/\s+/g, " ").trim();
-}
-
-/**
- * SVG 라벨의 한글이 서버(람다)에서 깨지지 않도록 번들된 NanumGothic을
- * fontconfig에 등록한다. sharp(librsvg)가 최초 렌더 전에 읽도록 env를 먼저 세팅.
- */
-let fontconfigReady = false;
-function ensureKoreanFont(): void {
-  if (fontconfigReady) return;
-  fontconfigReady = true;
-  try {
-    const fontDir = path.join(process.cwd(), "public", "fonts");
-    const confDir = path.join(os.tmpdir(), "fontconfig");
-    mkdirSync(confDir, { recursive: true });
-    const conf = `<?xml version="1.0"?>
-<!DOCTYPE fontconfig SYSTEM "fonts.dtd">
-<fontconfig>
-  <dir>${fontDir}</dir>
-  <cachedir>${path.join(os.tmpdir(), "fonts-cache")}</cachedir>
-</fontconfig>`;
-    const confPath = path.join(confDir, "fonts.conf");
-    writeFileSync(confPath, conf);
-    if (!process.env.FONTCONFIG_FILE) process.env.FONTCONFIG_FILE = confPath;
-    if (!process.env.FONTCONFIG_PATH) process.env.FONTCONFIG_PATH = confDir;
-  } catch (e) {
-    // 폰트 설정 실패 시에도 패키지 생성은 계속 (라벨 글꼴만 대체됨)
-    console.warn(
-      `dimode-package: fontconfig 설정 실패 — 라벨 한글이 대체 글꼴로 렌더링될 수 있음: ${e instanceof Error ? e.message : e}`,
-    );
-  }
 }
 
 export interface DimodePackageInput {
@@ -118,56 +85,86 @@ function splitRef(ref: string): [string, number] {
   return [ref.slice(0, i), Number.isFinite(n) ? n : 0];
 }
 
-function escapeXml(s: string): string {
-  return s
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;");
+interface ProofImage {
+  buf: Buffer;
+  w: number;
+  h: number;
 }
 
-/** 합성 이미지 안에서 영수증을 구분하는 라벨 띠 (SVG → sharp 합성) */
-function labelStrip(text: string): Buffer {
-  const svg = `<svg width="${IMG_WIDTH}" height="${LABEL_HEIGHT}" xmlns="http://www.w3.org/2000/svg">
-    <rect width="100%" height="100%" fill="#2F5496"/>
-    <text x="16" y="${LABEL_HEIGHT / 2 + 8}" font-family="NanumGothic, Malgun Gothic, sans-serif"
-      font-size="26" font-weight="bold" fill="#ffffff">${escapeXml(text)}</text>
-  </svg>`;
-  return Buffer.from(svg);
-}
-
-async function normalizeImage(buf: Buffer): Promise<{ buf: Buffer; h: number }> {
-  const out = await sharp(buf)
-    .rotate()
-    .resize(IMG_WIDTH, MAX_SINGLE_IMG_H, { fit: "inside", withoutEnlargement: false })
-    .jpeg({ quality: 82 })
-    .toBuffer();
-  const meta = await sharp(out).metadata();
-  return { buf: out, h: meta.height ?? 0 };
-}
-
-/** 라벨 띠 + 영수증 이미지(들)를 세로로 이어 붙인 한 장의 jpg */
-async function composeReceipts(
-  parts: Array<{ label: string; images: Array<{ buf: Buffer; h: number }> }>,
-): Promise<Buffer> {
-  const layers: Array<{ input: Buffer; left: number; top: number }> = [];
-  let y = 0;
-  for (const p of parts) {
-    layers.push({ input: labelStrip(p.label), left: 0, top: y });
-    y += LABEL_HEIGHT;
-    for (const img of p.images) {
-      layers.push({ input: img.buf, left: 0, top: y });
-      y += img.h;
-    }
-    y += RECEIPT_GAP;
+/**
+ * PDF 삽입용 압축 — 1MB 예산 안에 여러 장을 담아야 하므로 공격적으로 줄인다.
+ * 크기가 큰 이미지는 품질·해상도를 단계적으로 낮춰 장당 ~180KB 이하를 노린다.
+ */
+async function compressForPdf(buf: Buffer): Promise<ProofImage> {
+  const attempts: Array<{ width: number; quality: number }> = [
+    { width: 1000, quality: 72 },
+    { width: 900, quality: 62 },
+    { width: 780, quality: 52 },
+  ];
+  let out: Buffer | null = null;
+  for (const a of attempts) {
+    out = await sharp(buf)
+      .rotate()
+      .resize(a.width, 2600, { fit: "inside", withoutEnlargement: true })
+      .jpeg({ quality: a.quality })
+      .toBuffer();
+    if (out.length <= 180_000) break;
   }
-  const height = Math.max(1, y - RECEIPT_GAP);
-  return sharp({
-    create: { width: IMG_WIDTH, height, channels: 3, background: "#ffffff" },
-  })
-    .composite(layers)
-    .jpeg({ quality: 82 })
-    .toBuffer();
+  const meta = await sharp(out!).metadata();
+  return { buf: out!, w: meta.width ?? 1, h: meta.height ?? 1 };
+}
+
+interface ProofPage {
+  header: string;
+  image: ProofImage;
+}
+
+/** 증빙 PDF — 페이지마다 헤더(증빙번호·지출일·금액·거래처) + 영수증 이미지 1장 */
+async function renderProofPdf(
+  title: string,
+  pages: ProofPage[],
+): Promise<Buffer> {
+  const fonts = await loadPdfFonts();
+  const MARGIN = 36;
+  const PAGE_W = 595; // A4 portrait
+  const PAGE_H = 842;
+  const doc = new PDFDocument({ size: "A4", margin: MARGIN, autoFirstPage: false });
+  doc.registerFont("KR", fonts.regular);
+  doc.registerFont("KR-Bold", fonts.bold);
+  const chunks: Buffer[] = [];
+  doc.on("data", (c: Buffer) => chunks.push(c));
+  const done = new Promise<void>((resolve, reject) => {
+    doc.on("end", () => resolve());
+    doc.on("error", (e: Error) => reject(e));
+  });
+
+  for (const page of pages) {
+    doc.addPage();
+    doc.rect(MARGIN, MARGIN, PAGE_W - MARGIN * 2, 26).fill("#2F5496");
+    doc
+      .font("KR-Bold")
+      .fontSize(10)
+      .fillColor("#FFFFFF")
+      .text(page.header.length > 72 ? `${page.header.slice(0, 71)}…` : page.header, MARGIN + 8, MARGIN + 7, {
+        width: PAGE_W - MARGIN * 2 - 16,
+        lineBreak: false,
+      });
+    // 출처 표기는 헤더 바 바로 아래 우측 — 하단 마진 밖에 그리면 자동 페이지 추가됨
+    doc.font("KR").fontSize(7).fillColor("#999999").text(title, MARGIN, MARGIN + 28, {
+      width: PAGE_W - MARGIN * 2,
+      align: "right",
+      lineBreak: false,
+    });
+    const areaY = MARGIN + 42;
+    const areaW = PAGE_W - MARGIN * 2;
+    const areaH = PAGE_H - MARGIN - areaY;
+    const scale = Math.min(areaW / page.image.w, areaH / page.image.h);
+    const drawW = page.image.w * scale;
+    doc.image(page.image.buf, MARGIN + (areaW - drawW) / 2, areaY, { width: drawW });
+  }
+  doc.end();
+  await done;
+  return Buffer.concat(chunks);
 }
 
 function buildItemWorkbook(
@@ -274,7 +271,7 @@ function buildRootSummaryWorkbook(
   ws.getCell("A1").font = { bold: true, size: 14 };
   ws.mergeCells("A2:H2");
   ws.getCell("A2").value =
-    `세목별 폴더에 명세 엑셀 1개 + 증빙 이미지(슬롯 20개 이내). 디모데 수치 기준일 ${DIMODE_SNAPSHOT_DATE} · 033/017 계좌 구분은 결산 엑셀의 '디모데대사' 시트 참조`;
+    `세목별 폴더에 명세 엑셀 1개 + 증빙 PDF(각 1MB 이하, 슬롯 20개 이내). 디모데 수치 기준일 ${DIMODE_SNAPSHOT_DATE} · 033/017 계좌 구분은 결산 엑셀의 '디모데대사' 시트 참조`;
   ws.getCell("A2").font = { italic: true, color: { argb: "FF595959" } };
 
   const headers = ["세목코드", "과목", "세목", "예산", "전도금 배정", "실지출", "건수", "증빙파일 수"];
@@ -330,7 +327,6 @@ export async function buildDimodePackageZip(
   input: DimodePackageInput,
 ): Promise<{ buffer: Buffer; itemCount: number; fileCount: number }> {
   const { receipts, catMap, imagesByReceipt, downloadImage, refByReceiptId } = input;
-  ensureKoreanFont();
 
   const catName = (r: Receipt): string =>
     r.category_id ? (catMap.get(r.category_id) ?? "(미지정)") : "(미지정)";
@@ -385,103 +381,133 @@ export async function buildDimodePackageZip(
     const withImages = g.members.filter(
       (m) => (imagesByReceipt.get(m.receipt.id) ?? []).length > 0,
     );
-    // 1) 이미지 다운로드+정규화 (동시 4, 실패한 장은 건너뛰고 계속 — 한 장 때문에 전체 실패 금지)
-    const normalizedByMember = new Map<PackReceipt, Array<{ buf: Buffer; h: number }>>();
+    // 1) 이미지 다운로드+압축 (동시 4, 실패한 장은 건너뛰고 계속 — 한 장 때문에 전체 실패 금지)
+    const pagesByMember = new Map<PackReceipt, ProofPage[]>();
     await mapPool(withImages, DOWNLOAD_CONCURRENCY, async (m) => {
       const imgs = (imagesByReceipt.get(m.receipt.id) ?? [])
         .slice()
         .sort((a, b) => (a.sort_order ?? 0) - (b.sort_order ?? 0));
-      const normalized: Array<{ buf: Buffer; h: number }> = [];
+      const amount = (m.receipt.total_amount ?? 0).toLocaleString("ko-KR");
+      const baseHeader = `${m.ref} · ${m.receipt.expense_date ?? ""} · ${amount}원 · ${m.receipt.merchant ?? ""}`;
+      const pages: ProofPage[] = [];
       for (const im of imgs) {
         try {
           const raw = await downloadImage(im.storage_path);
-          normalized.push(await normalizeImage(raw));
+          pages.push({ header: baseHeader, image: await compressForPdf(raw) });
         } catch (e) {
           console.warn(
             `dimode-package: 증빙 이미지 처리 실패 — ${m.ref} ${im.storage_path}: ${e instanceof Error ? e.message : e}`,
           );
         }
       }
-      normalizedByMember.set(m, normalized);
+      pages.forEach((p, i) => {
+        if (pages.length > 1) p.header = `${baseHeader} (${i + 1}/${pages.length})`;
+      });
+      pagesByMember.set(m, pages);
     });
 
-    // 2) 영수증 → 합성 단위(라벨+이미지). 단독으로 높이 한계를 넘는 영수증은 (계속)으로 분할.
-    interface Unit {
-      member: PackReceipt;
-      label: string;
-      /** 같은 영수증의 분할 순번 (1 = 첫 조각) */
-      part: number;
-      images: Array<{ buf: Buffer; h: number }>;
-      height: number;
+    // 2) 페이지 바이트 예산으로 PDF 파일 구성 — 영수증 경계에서만 자르되,
+    //    한 영수증이 예산을 단독 초과하면 페이지 단위로 나눈다.
+    interface PdfPlan {
+      pages: ProofPage[];
+      members: PackReceipt[];
+      firstRef: string;
+      lastRef: string;
+      bytes: number;
     }
-    const units: Unit[] = [];
+    const plans: PdfPlan[] = [];
+    let cur: PdfPlan | null = null;
+    const flushPlan = () => {
+      if (cur && cur.pages.length > 0) plans.push(cur);
+      cur = null;
+    };
     for (const m of withImages) {
-      const normalized = normalizedByMember.get(m) ?? [];
-      if (normalized.length === 0) continue; // 전부 실패 → 명세에 '증빙없음'으로 남음
-      const amount = (m.receipt.total_amount ?? 0).toLocaleString("ko-KR");
-      const baseLabel = `${m.ref} · ${m.receipt.expense_date ?? ""} · ${amount}원 · ${m.receipt.merchant ?? ""}`;
-      let seg: Array<{ buf: Buffer; h: number }> = [];
-      let segH = LABEL_HEIGHT;
-      let segNo = 0;
-      const flush = () => {
-        if (seg.length === 0) return;
-        segNo += 1;
-        units.push({
-          member: m,
-          label: segNo === 1 ? baseLabel : `${baseLabel} (계속 ${segNo})`,
-          part: segNo,
-          images: seg,
-          height: segH + RECEIPT_GAP,
-        });
-        seg = [];
-        segH = LABEL_HEIGHT;
-      };
-      for (const img of normalized) {
-        if (seg.length > 0 && segH + img.h > MAX_COMPOSITE_H) flush();
-        seg.push(img);
-        segH += img.h;
+      const pages = pagesByMember.get(m) ?? [];
+      if (pages.length === 0) continue; // 전부 실패 → 명세에 '증빙없음'으로 남음
+      const memberBytes = pages.reduce((s, p) => s + p.image.buf.length, 0);
+      if (memberBytes > PDF_IMG_BUDGET) {
+        // 대형 영수증: 페이지 단위 분할로 전용 PDF들 생성
+        flushPlan();
+        let seg: ProofPage[] = [];
+        let segBytes = 0;
+        for (const p of pages) {
+          if (seg.length > 0 && segBytes + p.image.buf.length > PDF_IMG_BUDGET) {
+            plans.push({ pages: seg, members: [m], firstRef: m.ref, lastRef: m.ref, bytes: segBytes });
+            seg = [];
+            segBytes = 0;
+          }
+          seg.push(p);
+          segBytes += p.image.buf.length;
+        }
+        if (seg.length > 0) {
+          plans.push({ pages: seg, members: [m], firstRef: m.ref, lastRef: m.ref, bytes: segBytes });
+        }
+        continue;
       }
-      flush();
+      if (cur && cur.bytes + memberBytes > PDF_IMG_BUDGET) flushPlan();
+      if (!cur) {
+        cur = { pages: [], members: [], firstRef: m.ref, lastRef: m.ref, bytes: 0 };
+      }
+      cur.pages.push(...pages);
+      cur.members.push(m);
+      cur.lastRef = m.ref;
+      cur.bytes += memberBytes;
     }
+    flushPlan();
 
-    // 3) 단위들을 파일로 패킹 — 슬롯 한도(19)를 지향하되 JPEG 높이 한계는 절대 넘지 않는다.
-    const perFileTarget = Math.max(1, Math.ceil(units.length / MAX_IMAGE_FILES));
-    const files: Unit[][] = [];
-    let cur: Unit[] = [];
-    let curH = 0;
-    for (const u of units) {
-      if (cur.length > 0 && (cur.length >= perFileTarget || curH + u.height > MAX_COMPOSITE_H)) {
-        files.push(cur);
-        cur = [];
-        curH = 0;
+    // 3) PDF 렌더 — 1MB를 넘으면 반으로 갈라 재시도 (폰트·구조 오버헤드 방어)
+    const title = `${DIMODE_TEAM.path} · ${g.item.subject} > ${g.item.name} (${g.item.code})`;
+    const renderQueue: PdfPlan[] = [...plans];
+    let partSeq = 0;
+    let emittedProofs = 0;
+    const usedNames = new Set<string>();
+    while (renderQueue.length > 0) {
+      const plan = renderQueue.shift()!;
+      const buf = await renderProofPdf(title, plan.pages);
+      if (buf.length > PDF_SIZE_LIMIT && plan.pages.length > 1) {
+        const mid = Math.ceil(plan.pages.length / 2);
+        const memberSet = (pgs: ProofPage[]) =>
+          plan.members.filter((m) => (pagesByMember.get(m) ?? []).some((p) => pgs.includes(p)));
+        const half = (pgs: ProofPage[]): PdfPlan => {
+          const members = memberSet(pgs);
+          return {
+            pages: pgs,
+            members,
+            firstRef: members[0]?.ref ?? plan.firstRef,
+            lastRef: members[members.length - 1]?.ref ?? plan.lastRef,
+            bytes: 0,
+          };
+        };
+        renderQueue.unshift(half(plan.pages.slice(0, mid)), half(plan.pages.slice(mid)));
+        continue;
       }
-      cur.push(u);
-      curH += u.height;
-    }
-    if (cur.length > 0) files.push(cur);
-
-    for (const fileUnits of files) {
-      const first = fileUnits[0];
-      const last = fileUnits[fileUnits.length - 1];
-      let name: string;
-      if (fileUnits.length === 1) {
-        const mmdd = (first.member.receipt.expense_date ?? "").slice(5).replace("-", "");
-        const base = `${first.member.ref}_${mmdd}_${first.member.receipt.total_amount}`;
-        name = safeName(first.part === 1 ? base : `${base}_계속${first.part}`) + ".jpg";
-      } else {
-        name = safeName(`${first.member.ref}~${last.member.ref}`) + ".jpg";
+      if (buf.length > PDF_SIZE_LIMIT) {
+        console.warn(
+          `dimode-package: ${plan.firstRef} 단일 페이지 PDF가 1MB 초과(${buf.length}B) — 그대로 포함, 필요시 수동 처리`,
+        );
       }
-      const jpg = await composeReceipts(
-        fileUnits.map((u) => ({ label: u.label, images: u.images })),
-      );
-      zip.file(`${folder}/${name}`, jpg);
-      for (const u of fileUnits) {
-        const m = u.member;
+      partSeq += 1;
+      let name =
+        plan.firstRef === plan.lastRef
+          ? safeName(plan.firstRef)
+          : safeName(`${plan.firstRef}~${plan.lastRef}`);
+      if (usedNames.has(name)) name = `${name}_${partSeq}`;
+      usedNames.add(name);
+      const fileName = `${name}.pdf`;
+      zip.file(`${folder}/${fileName}`, buf);
+      for (const m of plan.members) {
         m.attachedFile = m.attachedFile
-          ? (m.attachedFile.includes(name) ? m.attachedFile : `${m.attachedFile} / ${name}`)
-          : name;
+          ? (m.attachedFile.includes(fileName) ? m.attachedFile : `${m.attachedFile} / ${fileName}`)
+          : fileName;
       }
       fileCount += 1;
+      emittedProofs += 1;
+    }
+
+    if (emittedProofs > MAX_PROOF_FILES) {
+      console.warn(
+        `dimode-package: ${g.item.name} 증빙 PDF ${emittedProofs}개 — 첨부 슬롯(${MAX_PROOF_FILES}) 초과, 전표를 나눠 제출 필요`,
+      );
     }
 
     const wb = buildItemWorkbook(g, input);
