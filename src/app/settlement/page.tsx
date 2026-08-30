@@ -39,20 +39,22 @@ export default async function SettlementPage({
         : "전체기간";
   const presetId = range ? (searchParams.preset ?? "custom") : "all";
 
-  const data = await getSettlementData(supabase, orgId, "all", range);
-  const details = buildSettlementDetails(data.splitEntries, expenseCategoryOrder(data.summary));
-
-  // 활성 게시 (마이그레이션 전이면 테이블이 없을 수 있으므로 오류는 무시)
-  let publication: { periodLabel: string; publishedAt: string } | null = null;
-  {
-    const { data: pub } = await supabase
+  // 결산 데이터와 게시 조회를 병렬 실행 (게시 테이블 미존재 등 오류는 무시)
+  const [data, { data: pub }] = await Promise.all([
+    getSettlementData(supabase, orgId, "all", range),
+    supabase
       .from("settlement_publication")
       .select("period_label, published_at")
       .eq("org_id", orgId)
       .eq("is_active", true)
       .order("published_at", { ascending: false })
       .limit(1)
-      .maybeSingle();
+      .maybeSingle(),
+  ]);
+  const details = buildSettlementDetails(data.splitEntries, expenseCategoryOrder(data.summary));
+
+  let publication: { periodLabel: string; publishedAt: string } | null = null;
+  {
     if (pub) {
       publication = {
         periodLabel: (pub as { period_label: string }).period_label,

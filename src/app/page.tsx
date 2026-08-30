@@ -19,18 +19,44 @@ export default async function HomePage({
 }) {
   const { user, profile, supabase } = await requireMembership();
 
-  const { data: orgRow } = await supabase
-    .from("organization")
-    .select("name")
-    .eq("id", profile.org_id!)
-    .maybeSingle();
-  const orgName = (orgRow as Pick<Organization, "name"> | null)?.name ?? null;
+  // 독립 조회 5건 병렬 실행 — 직렬 왕복 제거 (TTFB 단축)
+  const [
+    { data: orgRow },
+    { data: pendingRows },
+    { data: recentRows },
+    balances,
+    { data: pub },
+  ] = await Promise.all([
+    supabase
+      .from("organization")
+      .select("name")
+      .eq("id", profile.org_id!)
+      .maybeSingle(),
+    supabase
+      .from("receipt")
+      .select("total_amount")
+      .eq("user_id", user.id)
+      .eq("status", "pending"),
+    supabase
+      .from("receipt")
+      .select("id, merchant, expense_date, total_amount, status, category_id")
+      .eq("user_id", user.id)
+      .order("created_at", { ascending: false })
+      .limit(5),
+    // 통장 잔액 (선생님 투명 조회). 통장 미등록이면 빈 배열.
+    getBankBalances(supabase, profile.org_id!),
+    // 결산 게시 공지 (관리자가 게시한 경우만. 테이블 미존재 등 오류는 무시 — 홈은 항상 렌더)
+    supabase
+      .from("settlement_publication")
+      .select("period_label, date_from, date_to, income_total, expense_total, summary, published_at")
+      .eq("org_id", profile.org_id!)
+      .eq("is_active", true)
+      .order("published_at", { ascending: false })
+      .limit(1)
+      .maybeSingle(),
+  ]);
 
-  const { data: pendingRows } = await supabase
-    .from("receipt")
-    .select("total_amount")
-    .eq("user_id", user.id)
-    .eq("status", "pending");
+  const orgName = (orgRow as Pick<Organization, "name"> | null)?.name ?? null;
 
   const pendingTotal = (pendingRows ?? []).reduce(
     (sum: number, r: { total_amount: number | null }) =>
@@ -39,33 +65,16 @@ export default async function HomePage({
   );
   const pendingCount = pendingRows?.length ?? 0;
 
-  const { data: recentRows } = await supabase
-    .from("receipt")
-    .select("id, merchant, expense_date, total_amount, status, category_id")
-    .eq("user_id", user.id)
-    .order("created_at", { ascending: false })
-    .limit(5);
   const recent = (recentRows ?? []) as Pick<
     ReceiptT,
     "id" | "merchant" | "expense_date" | "total_amount" | "status" | "category_id"
   >[];
 
-  // 통장 잔액 (선생님 투명 조회). 통장 미등록이면 빈 배열.
-  const balances = await getBankBalances(supabase, profile.org_id!);
   const hasBalances = balances.some((b) => b.balance !== null);
   const totalBalance = balances.reduce((s, b) => s + (b.balance ?? 0), 0);
 
-  // 결산 게시 공지 (관리자가 게시한 경우만. 테이블 미존재 등 오류는 무시 — 홈은 항상 렌더)
   let notice: SettlementNotice | null = null;
   {
-    const { data: pub } = await supabase
-      .from("settlement_publication")
-      .select("period_label, date_from, date_to, income_total, expense_total, summary, published_at")
-      .eq("org_id", profile.org_id!)
-      .eq("is_active", true)
-      .order("published_at", { ascending: false })
-      .limit(1)
-      .maybeSingle();
     if (pub) {
       const p = pub as {
         period_label: string;

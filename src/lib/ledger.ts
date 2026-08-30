@@ -20,28 +20,30 @@ export async function getBankBalances(
     .eq("org_id", orgId)
     .order("label");
 
-  const result: AccountBalance[] = [];
-  for (const a of (accts ?? []) as {
+  // 계좌별 최신 잔액 조회를 병렬 실행 (직렬 왕복 제거)
+  const accounts = (accts ?? []) as {
     id: string;
     label: string;
     bank_name: string;
-  }[]) {
-    const { data: latest } = await supabase
-      .from("bank_transaction")
-      .select("balance, txn_at")
-      .eq("bank_account_id", a.id)
-      .order("txn_at", { ascending: false })
-      .limit(1)
-      .maybeSingle();
-    result.push({
-      bankAccountId: a.id,
-      label: a.label,
-      bankName: a.bank_name,
-      balance: (latest as { balance: number | null } | null)?.balance ?? null,
-      lastTxnAt: (latest as { txn_at: string } | null)?.txn_at ?? null,
-    });
-  }
-  return result;
+  }[];
+  return Promise.all(
+    accounts.map(async (a) => {
+      const { data: latest } = await supabase
+        .from("bank_transaction")
+        .select("balance, txn_at")
+        .eq("bank_account_id", a.id)
+        .order("txn_at", { ascending: false })
+        .limit(1)
+        .maybeSingle();
+      return {
+        bankAccountId: a.id,
+        label: a.label,
+        bankName: a.bank_name,
+        balance: (latest as { balance: number | null } | null)?.balance ?? null,
+        lastTxnAt: (latest as { txn_at: string } | null)?.txn_at ?? null,
+      };
+    }),
+  );
 }
 
 export interface LedgerMonth {

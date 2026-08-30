@@ -1,8 +1,13 @@
+import { cache } from "react";
 import { redirect } from "next/navigation";
 import { createClient } from "@/lib/supabase/server";
 import type { Profile } from "@/lib/db-types";
 
-export async function requireUser() {
+/**
+ * 요청(렌더 패스)당 1회만 실행 — layout·page가 각각 호출해도
+ * auth.getUser() 네트워크 왕복과 profile 조회가 중복되지 않는다.
+ */
+export const requireUser = cache(async () => {
   const supabase = createClient();
   const {
     data: { user },
@@ -17,7 +22,7 @@ export async function requireUser() {
     .single();
 
   return { user, profile: data as Profile | null, supabase };
-}
+});
 
 export async function requireMembership() {
   const { user, profile, supabase } = await requireUser();
